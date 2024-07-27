@@ -19,6 +19,7 @@ from .model_downsize import (
     mamba_module_handler,
     clip_module_handler,
 )
+from .weight_reorder import sam_weight_reorder
 from .param_prioritization import *
 from .utils import calculate_params, save_dict_to_file, load_dict_from_file
 
@@ -53,6 +54,10 @@ class OFM:
         self.local_grads = []
         self.alphas = []
         self._pre_global_grad = None
+    
+    @staticmethod
+    def check():
+        return 'from OFM_SAM package'
 
     def random_resource_aware_model(self):
         """_summary_
@@ -142,6 +147,13 @@ class OFM:
 
     def largest_model(self):
         return copy.deepcopy(self.model), self.total_params, {}
+    
+    def mlp_layer_reordering(self,order=0):
+        if "sam" == self.model.config.model_type.lower():
+            self.model = sam_weight_reorder(self.model,order)
+        else:
+            raise NotImplemented(f'Weight reordering not yet implemented for \
+                                 {self.model.config.model_type.lower()}')
 
     def resource_aware_model(self, arc_config):
         if "bert" == self.model.config.model_type.lower():
