@@ -89,6 +89,12 @@ if __name__ == '__main__':
             train_dataset = SA1BDataset(f'{DATA_ROOT}SA1B', processor=processor, do_crop=args.crop,label='from_embedding')
         test_dataset = SA1BDataset(f'{DATA_ROOT}SA1B', processor=processor, do_crop=args.crop,label='all_test')
 
+        #Use X batches of data for wanda reordering
+        reordering_dataset = SA1BDataset(f'{DATA_ROOT}SA1B', processor=processor, do_crop=args.crop,label='from_embedding')
+        subset_dataset = Subset(reordering_dataset, indices=range(0,32 * args.batch_size,1))
+        reorder_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=True, drop_last=False, collate_fn=sa1b_collate_fn)
+        args.reorder_dataloader = reorder_dataloader
+
         # Apply subset for shorter training
         if args.train_subset:
             subset_dataset = Subset(train_dataset, indices=range(0,args.train_subset,1))
@@ -140,8 +146,17 @@ if __name__ == '__main__':
 
     #Reorder mlp layers to see if pretrained model is consistent
     if args.reorder == 'once':
-        args.supermodel.mlp_layer_reordering()
-    
+        if args.reorder_method == 'magnitude':
+            score_dist = args.supermodel.mlp_layer_reordering()
+            plot_dist(score_dist,filename='magnitude-dist.png',importance='Magnitude')
+        elif args.reorder_method == 'wanda':
+            score_dist = args.supermodel.mlp_layer_reordering(reorder_dataloader,'wanda')
+            plot_dist(score_dist,filename='wanda-dist.png',importance='Wanda')
+        elif args.reorder_method == 'movement':
+            score_dist = args.supermodel.mlp_layer_reordering(reorder_dataloader,'movement')
+            plot_dist(score_dist,filename='movement-dist.png',importance='Movement')
+
+
     #Initialize Trainer
     trainer = SA1B_NAS_Trainer(args)
 
@@ -181,7 +196,7 @@ if __name__ == '__main__':
     args.logger.info(f'medium pre-NAS mIoU : {miou}% \t time: {round(end_test - start_test,4)} seconds')
     #save_preds(map,'Medium')
 
-
+    exit()
 
     args.logger.info(f'NAS Training starts')
     start = timeit.default_timer()

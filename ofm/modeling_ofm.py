@@ -148,9 +148,10 @@ class OFM:
     def largest_model(self):
         return copy.deepcopy(self.model), self.total_params, {}
     
-    def mlp_layer_reordering(self,order=0):
+    def mlp_layer_reordering(self,dataloader=None,method='magnitude'):
         if "sam" == self.model.config.model_type.lower():
-            self.model = sam_weight_reorder(self.model,order)
+            self.model, score_dist = sam_weight_reorder(self.model,dataloader,method)
+            return score_dist
         else:
             raise NotImplemented(f'Weight reordering not yet implemented for \
                                  {self.model.config.model_type.lower()}')

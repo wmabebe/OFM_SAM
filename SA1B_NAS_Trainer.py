@@ -270,14 +270,20 @@ class SA1B_NAS_Trainer:
 
             #Reorder mlp layers per epoch
             if self.reorder == 'per_epoch':
-                self.supermodel.mlp_layer_reordering()
+                if self.reorder_method == 'magnitude':
+                    self.supermodel.mlp_layer_reordering()
+                elif self.reorder_method == 'wanda':
+                    self.supermodel.mlp_layer_reordering(self.reorder_dataloader,'wanda')
 
             start_epoch = timeit.default_timer()
             for idx, batch in enumerate(tqdm(self.train_dataloader, disable=self.no_verbose)):
 
                 #Reorder mlp layers for every batch 
                 if self.reorder == 'per_batch':
-                    self.supermodel.mlp_layer_reordering() 
+                    if self.reorder_method == 'magnitude':
+                        self.supermodel.mlp_layer_reordering()
+                    elif self.reorder_method == 'wanda':
+                        self.supermodel.mlp_layer_reordering(self.reorder_dataloader,'wanda')
                 
                 if 'e' in self.trainable and 'm' in self.trainable:
                     inputs, images, labels, boxes, points = batch
@@ -293,7 +299,7 @@ class SA1B_NAS_Trainer:
                 do_save = ((idx + 1) % save_interval == 0)
 
                 # #Test when saving
-                # do_test = do_save
+                do_test = do_save
                                 
                 #Train largest submodel (= supernet)
                 if 'l' in self.sandwich:

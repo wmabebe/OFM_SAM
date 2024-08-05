@@ -37,6 +37,7 @@ def get_args():
     test_prompts = ['p','b','p+b']
     loss_funcs = ['dice', 'dicefocal']
     reorder_interval = ['','once','per_epoch','per_batch']
+    reorder_method = ['magnitude','movement','wanda']
     parser.add_argument('--dataset', type=str, choices=valid_datasets, default='sa1b', help='Dataset (choices: {%(choices)s}, default: %(default)s).')
     parser.add_argument('--trainable', type=str, choices=valid_trainables, default='em', help='Choice of SAM modules to train (Encoder, Mask decoder, Both) (choices: {%(choices)s}, default: %(default)s).')
     parser.add_argument('--sandwich', type=str, choices=valid_submodels, default='lsm', help='Sandwich configuration: submodels to train (Largest, Smallest, Medium) (choices: {%(choices)s}, default: %(default)s).')
@@ -54,6 +55,8 @@ def get_args():
     parser.add_argument('--no_verbose', action='store_true', help='Enable to disable verbose mode.')
     parser.add_argument('--crop', action='store_true', help='Crop SA1B images for training with larger batch sizes.')
     parser.add_argument('--reorder', type=str, default='', choices=reorder_interval, help='How often to reorder the mlp layers space')
+    parser.add_argument('--reorder_method', type=str, default='magnitude', choices=reorder_method, help='Reordering method')
+
 
 
     args = parser.parse_args()
@@ -505,6 +508,34 @@ def get_trainable_parameters(model,trainable):
 # Suppose you know the order of your customized Dataset
 def sa1b_collate_fn(batch):
     return list(map(list, zip(*batch)))  # transpose list of list
+
+def plot_dist(score_dist,filename='score-dist.png',importance='Magnitude'):
+    # Create a figure with 3 rows and 4 columns of subplots
+    fig, axs = plt.subplots(3, 4, figsize=(15, 10))
+
+    # Flatten the axes array for easy iteration
+    axs = axs.flatten()
+
+    # Iterate through the dictionary and the axes
+    for i, (key, values) in enumerate(score_dist.items()):
+        # Calculate the probability distribution
+        count, bins, ignored = axs[i].hist(values, bins=100, density=True, alpha=0.6, color='g')
+        
+        # Plot the probability density function
+        mu, sigma = np.mean(values), np.std(values)
+        print(f'Head {key} min, mean, max ({min(values)},{mu},{max(values)})')
+        best_fit_line = (1 / (np.sqrt(2 * np.pi) * sigma)) * np.exp(-0.5 * (1 / sigma * (bins - mu)) ** 2)
+        axs[i].plot(bins, best_fit_line, '--', linewidth=2)
+        
+        # Set title and labels
+        axs[i].set_title(f'Head {key}')
+        axs[i].set_xlabel(importance)
+        axs[i].set_ylabel('Probability')
+
+    # Adjust layout to prevent overlap
+    plt.tight_layout()
+    plt.show()
+    plt.savefig(filename)
 
 #Collate for skipping blank masks in coco 
 def none_skipper_collate(batch):
