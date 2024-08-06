@@ -19,7 +19,7 @@ from .model_downsize import (
     mamba_module_handler,
     clip_module_handler,
 )
-from .weight_reorder import sam_weight_reorder
+from .weight_reorder import sam_weight_reorder, mask_layers, remove_layers
 from .param_prioritization import *
 from .utils import calculate_params, save_dict_to_file, load_dict_from_file
 
@@ -155,6 +155,12 @@ class OFM:
         else:
             raise NotImplemented(f'Weight reordering not yet implemented for \
                                  {self.model.config.model_type.lower()}')
+    
+    def mask_layers(self,layers):
+        mask_layers(self.model, layers)
+    
+    def remove_layers(self,layers):
+        remove_layers(self.model, layers)
 
     def resource_aware_model(self, arc_config):
         if "bert" == self.model.config.model_type.lower():

@@ -208,6 +208,61 @@ def magnitude_reordering(sam_vit_layers):
     
     return score_dist
 
+
+def mask_layers(model, layer_indices_to_mask):
+    """
+    Masks specified layers in the model by setting their parameters to zero.
+
+    Args:
+        model (torch.nn.Module): The model containing the layers.
+        layer_indices_to_mask (list): List of layer indices to mask.
+
+    Returns:
+        torch.nn.Module: The modified model with masked layers.
+    """
+    for idx, layer in enumerate(model.vision_encoder.layers):
+        if idx in layer_indices_to_mask:
+            # Zero out the parameters in the attention sub-layer
+            layer.attn.qkv.weight.data.zero_()
+            layer.attn.qkv.bias.data.zero_()
+            layer.attn.proj.weight.data.zero_()
+            layer.attn.proj.bias.data.zero_()
+
+            # Zero out the parameters in the MLP sub-layer
+            layer.mlp.lin1.weight.data.zero_()
+            layer.mlp.lin1.bias.data.zero_()
+            layer.mlp.lin2.weight.data.zero_()
+            layer.mlp.lin2.bias.data.zero_()
+
+            # Zero out the LayerNorm parameters if desired (optional)
+            layer.layer_norm1.weight.data.zero_()
+            layer.layer_norm1.bias.data.zero_()
+            layer.layer_norm2.weight.data.zero_()
+            layer.layer_norm2.bias.data.zero_()
+
+    return model
+
+def remove_layers(model, layer_indices_to_remove):
+    """
+    Removes specified layers from the model by their indices.
+
+    Args:
+        model (torch.nn.Module): The model containing the layers.
+        layer_indices_to_remove (list): List of layer indices to remove.
+
+    Returns:
+        torch.nn.Module: The modified model with specified layers removed.
+    """
+    # Sort the indices in descending order to avoid index shifting issues
+    layer_indices_to_remove = sorted(layer_indices_to_remove, reverse=True)
+    
+    # Iterate over the indices and remove the corresponding layers
+    for idx in layer_indices_to_remove:
+        del model.vision_encoder.layers[idx]
+    
+    return model
+
+
 def sam_weight_reorder(model, dataloader=None, method='magnitude'):
     """_summary_
 
