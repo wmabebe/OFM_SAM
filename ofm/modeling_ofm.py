@@ -35,10 +35,12 @@ class OFM:
         if not elastic_config:
             # set defalt search space configuration (this is defalt setting for bert)
             elastic_config = {
-                "atten_out_space": [768],
-                "inter_hidden_space": [3072, 1920, 1280],
-                "residual_hidden_space": [768],
-            }
+                0:  {
+                        "atten_out_space": [768],
+                        "inter_hidden_space": [3072, 1920, 1280],
+                        "residual_hidden_space": [768],
+                    }
+                }
             print(
                 f"[Warning]: No elastic configuration provides. Set to the defalt elastic space {elastic_config}."
             )

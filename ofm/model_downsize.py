@@ -91,14 +91,7 @@ def check_weight_copy_correctness(subnet, org_model):
     return True
 
 
-def arc_config_sampler(
-    atten_out_space: List[int],
-    inter_hidden_space: List[int],
-    residual_hidden_space: List[int],
-    n_layer=12,
-    smallest=False,
-    largest=False,
-) -> dict:
+def arc_config_sampler(elastic_config:dict, n_layer=12,smallest=False,largest=False)->dict:
     """Generate subnet architecture configuration based on the provided configuration.
 
     Args:
@@ -114,33 +107,26 @@ def arc_config_sampler(
     arc_config = {}
     np.random.seed(int(time.time()))  # Set the seed to the current time
 
-    residual_hidden = np.random.choice(residual_hidden_space).item()
     assert smallest == False or largest == False  # Only one can be true
-
-    if smallest:
-        residual_hidden = min(residual_hidden_space)
-    elif largest:
-        residual_hidden = max(residual_hidden_space)
-
+    assert len(elastic_config) == n_layer
+    
     for layer in range(n_layer):
         if smallest:
-            inter_hidden = min(inter_hidden_space)
-            atten_out = min(atten_out_space)
+            inter_hidden = min(elastic_config[layer]["inter_hidden_space"])
+            atten_out = min(elastic_config[layer]["atten_out_space"])
         elif largest:
-            inter_hidden = max(inter_hidden_space)
-            atten_out = max(atten_out_space)
+            inter_hidden = max(elastic_config[layer]["inter_hidden_space"])
+            atten_out = max(elastic_config[layer]["atten_out_space"])
         else:
-            inter_hidden = np.random.choice(inter_hidden_space).item()
-            atten_out = np.random.choice(atten_out_space).item()
+            inter_hidden = np.random.choice(elastic_config[layer]["inter_hidden_space"]).item()
+            atten_out = np.random.choice(elastic_config[layer]["atten_out_space"]).item()
 
         arc_config[f"layer_{layer + 1}"] = {
             "atten_out": atten_out,
             "inter_hidden": inter_hidden,
-            "residual_hidden": residual_hidden,
+            "residual_hidden": elastic_config[layer]["residual_hidden"],
         }
-
     return arc_config
-
 
 def clip_module_handler(model, arc_config):
     from transformers.models.clip.modeling_clip import (
