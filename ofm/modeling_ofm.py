@@ -92,7 +92,7 @@ class OFM:
 
         if "sam" == self.model.config.model_type.lower():
             arc_config = arc_config_sampler(
-                **self.model.config.elastic_config,
+                self.model.config.elastic_config,
                 smallest=True,
                 n_layer=self.model.vision_encoder.config.num_hidden_layers,
             )
