@@ -74,7 +74,7 @@ if __name__ == '__main__':
 
     print(f'testloader : {len(test_dataloader)}')
 
-    layers_to_mask = [[1,6,9]]
+    layers_to_mask = [[1,5,7]]
 
 
     for reordering in ['','magnitude','wanda']:
