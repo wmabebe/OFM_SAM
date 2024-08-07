@@ -37,19 +37,31 @@ if __name__ == '__main__':
     original_model = SamModel.from_pretrained("facebook/sam-vit-base")
     processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
 
+    #Prune 3 layers
+    for idx in [1,6,9]:
+        del original_model.vision_encoder.layers[idx]
+        print(original_model.vision_encoder)
+    original_model.vision_encoder.config.global_attn_indexes = [1, 4, 6, 8]  #"global_attn_indexes": [ 2, 5, 8, 11 ] 
+    original_model.vision_encoder.config.num_hidden_layers = 11
+
     # OFM configuration and submodel initialization
-    elastic_config = {
-        "atten_out_space": [512,768], #must be divisbly by num_heads==12
-        "inter_hidden_space": [64, 128, 512],
-        "residual_hidden_space": [512, 768, 1024],
+    regular_config = {
+        "atten_out_space": [768], #must be divisbly by num_heads==12
+        "inter_hidden_space": [3072],
+        "residual_hidden": [1020],
     }
     elastic_config = {
         "atten_out_space": [768], #Don't go over 768
         "inter_hidden_space": [768,1020,1536], #Reduce for minimizing model size
-        "residual_hidden_space": [768,1020,1536],
+        "residual_hidden": [1020],
     }
 
-    ofm = OFM(original_model, elastic_config=elastic_config)
+    config = {0:regular_config, 1:elastic_config, 2:elastic_config,3:elastic_config, 4:elastic_config,
+                5:elastic_config, 6:elastic_config,7:elastic_config,8:elastic_config,
+                9:elastic_config,10:elastic_config} 
+
+
+    ofm = OFM(original_model, elastic_config=config)
 
     # saved_supermodel = SamModel.from_pretrained("logs/2024-05-25--01:28:19.953478_dataset[sa1b]_trainable[em]_epochs[100]_lr[1e-05]_local_bs[32]")
     # ofm = OFM(saved_supermodel)
@@ -168,35 +180,34 @@ if __name__ == '__main__':
     # #args.logger.info(f'supermodel pre-NAS IoUs: {sorted_mious}')
     # args.logger.info(f'pre-trained model mIoU : {miou}% \t time: {round(end_test - start_test,4)} seconds')
     
-    start_test = timeit.default_timer()
-    #miou, mious, map = eval(args.supermodel.model,test_dataloader,disable_verbose=args.no_verbose,processor=processor,prompt=args.test_prompt)
-    miou, mious, map = trainer.eval(args.supermodel.model)
-    end_test = timeit.default_timer()
-    #sorted_mious, indices = torch.sort(mious)
-    #args.logger.info(f'supermodel pre-NAS IoUs: {sorted_mious}')
-    args.logger.info(f'supermodel pre-NAS mIoU : {miou}% \t time: {round(end_test - start_test,4)} seconds')
+    # start_test = timeit.default_timer()
+    # #miou, mious, map = eval(args.supermodel.model,test_dataloader,disable_verbose=args.no_verbose,processor=processor,prompt=args.test_prompt)
+    # miou, mious, map = trainer.eval(args.supermodel.model)
+    # end_test = timeit.default_timer()
+    # #sorted_mious, indices = torch.sort(mious)
+    # #args.logger.info(f'supermodel pre-NAS IoUs: {sorted_mious}')
+    # args.logger.info(f'supermodel pre-NAS mIoU : {miou}% \t time: {round(end_test - start_test,4)} seconds')
 
-    #save_preds(map,'Largest')
-    submodel, submodel.config.num_parameters, submodel.config.arch = args.supermodel.smallest_model()
-    start_test = timeit.default_timer()
-    #miou, mious, map = eval(submodel,test_dataloader,disable_verbose=args.no_verbose,processor=processor,prompt=args.test_prompt)
-    miou, mious, map = trainer.eval(submodel)
-    end_test = timeit.default_timer()
-    #sorted_mious, indices = torch.sort(mious)
-    #args.logger.info(f'smallest pre-NAS IoUs: {sorted_mious}')
-    args.logger.info(f'smallest pre-NAS mIoU : {miou}% \t time: {round(end_test - start_test,4)} seconds')
-    #save_preds(map,'Smallest')
-    submodel, submodel.config.num_parameters, submodel.config.arch = args.supermodel.random_resource_aware_model()
-    start_test = timeit.default_timer()
-    #miou, mious, map = eval(submodel,test_dataloader,disable_verbose=args.no_verbose,processor=processor,prompt=args.test_prompt)
-    miou, mious, map = trainer.eval(submodel)
-    end_test = timeit.default_timer()
-    #sorted_mious, indices = torch.sort(mious)
-    #args.logger.info(f'medium pre-NAS IoUs: {sorted_mious}')
-    args.logger.info(f'medium pre-NAS mIoU : {miou}% \t time: {round(end_test - start_test,4)} seconds')
-    #save_preds(map,'Medium')
+    # #save_preds(map,'Largest')
+    # submodel, submodel.config.num_parameters, submodel.config.arch = args.supermodel.smallest_model()
+    # start_test = timeit.default_timer()
+    # #miou, mious, map = eval(submodel,test_dataloader,disable_verbose=args.no_verbose,processor=processor,prompt=args.test_prompt)
+    # miou, mious, map = trainer.eval(submodel)
+    # end_test = timeit.default_timer()
+    # #sorted_mious, indices = torch.sort(mious)
+    # #args.logger.info(f'smallest pre-NAS IoUs: {sorted_mious}')
+    # args.logger.info(f'smallest pre-NAS mIoU : {miou}% \t time: {round(end_test - start_test,4)} seconds')
+    # #save_preds(map,'Smallest')
+    # submodel, submodel.config.num_parameters, submodel.config.arch = args.supermodel.random_resource_aware_model()
+    # start_test = timeit.default_timer()
+    # #miou, mious, map = eval(submodel,test_dataloader,disable_verbose=args.no_verbose,processor=processor,prompt=args.test_prompt)
+    # miou, mious, map = trainer.eval(submodel)
+    # end_test = timeit.default_timer()
+    # #sorted_mious, indices = torch.sort(mious)
+    # #args.logger.info(f'medium pre-NAS IoUs: {sorted_mious}')
+    # args.logger.info(f'medium pre-NAS mIoU : {miou}% \t time: {round(end_test - start_test,4)} seconds')
+    # #save_preds(map,'Medium')
 
-    exit()
 
     args.logger.info(f'NAS Training starts')
     start = timeit.default_timer()

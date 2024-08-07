@@ -314,6 +314,7 @@ class SA1B_NAS_Trainer:
                 #Train smallest model
                 if 's' in self.sandwich:
                     submodel, submodel.config.num_parameters, submodel.config.arch = self.supermodel.smallest_model() 
+                    print(f'Smallest arc : {submodel}')
                     self.single_step(submodel,inputs,labels,'Smallest',do_test,images, boxes, points)
 
 

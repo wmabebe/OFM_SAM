@@ -20,14 +20,14 @@ def randomize_weights(model):
 def mlp_forward_hook(inst, inp, out, layer, lin):
     W = inst.weight  # shape: (3072, 768)
 
-    print(f'inst : {inst} \t layer : {layer} \t lin : {lin}')
-    print(f'\tW : {W.shape}')
+    #print(f'inst : {inst} \t layer : {layer} \t lin : {lin}')
+    #print(f'\tW : {W.shape}')
 
     C_out = W.shape[1]
     l2_norm = inp[0].view(-1,C_out)
     l2_norm = l2_norm.norm(p=2, dim=0)
 
-    print(f'\tl2_norm : {l2_norm.shape}')
+    #print(f'\tl2_norm : {l2_norm.shape}')
 
     wanda = W.abs() * l2_norm
 
@@ -39,7 +39,7 @@ def mlp_forward_hook(inst, inp, out, layer, lin):
         column_sums = torch.abs(wanda).sum(dim=0)
         wanda_sums[layer][1].append(column_sums)
     
-    print(f'\twanda : {wanda.shape}')
+    #print(f'\twanda : {wanda.shape}')
 
     #return wanda
 
@@ -145,7 +145,7 @@ def wanda_reordering(model,dataloader):
     with torch.no_grad():
         for idx,(inputs, labels) in enumerate(dataloader):
             data = {'pixel_values': torch.stack([d['pixel_values'].squeeze(0) for d in inputs])}
-            print(f'data["pixel_values"] : {data["pixel_values"].shape}')
+            #print(f'data["pixel_values"] : {data["pixel_values"].shape}')
             output = encoder(data["pixel_values"].to(device))
     
         for hook_1,hook_2 in zip(hooks_1,hooks_2):
@@ -153,10 +153,10 @@ def wanda_reordering(model,dataloader):
             hook_2.remove()
 
     score_dist = {}
-    print(f'Aggregating wanda sums')
+    #print(f'Aggregating wanda sums')
     for (k,v),layer in zip(wanda_sums.items(),encoder.layers):
         avg_sums = ((sum(v[0]) / len(v[0])) + (sum(v[1]) / len(v[1]))) / 2
-        print(f'{k} --> {avg_sums.shape}')
+        #print(f'{k} --> {avg_sums.shape}')
 
         score_dist[k] = avg_sums.flatten().tolist()
 
