@@ -112,10 +112,18 @@ class OFM:
                                  {self.model.config.model_type.lower()}')
     
     def mask_layers(self,layers):
-        mask_layers(self.model, layers)
+        if "sam" == self.model.config.model_type.lower():
+            mask_layers(self.model, layers)
+        else:
+            raise NotImplemented(f'Pruning not yet implemented for \
+                                 {self.model.config.model_type.lower()}')
     
     def remove_layers(self,layers):
-        remove_layers(self.model, layers)
+        if "sam" == self.model.config.model_type.lower():
+            remove_layers(self.model, layers)
+        else:
+            raise NotImplemented(f'Pruning not yet implemented for \
+                                 {self.model.config.model_type.lower()}')
 
     def resource_aware_model(self, arc_config):
         if "bert" == self.model.config.model_type.lower():
@@ -165,7 +173,6 @@ class OFM:
                         0.9 * local_grad + 0.1 * self._pre_global_grad[name][slice]
                     )
                 else:
-                    print(f'name {name} \t slice {slice} \t param.shape {param.shape} \t local_grad.shape {local_grad.shape}')
                     param[slices] -= local_grad
 
     def apply_accumulate_grad(self, beta=0.5):
