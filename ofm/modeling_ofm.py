@@ -51,6 +51,7 @@ class OFM:
             elastic_config, dict
         ), "Invalid elastic_config, expect input a dictionary or file path"
 
+        elastic_config = {int(k):v for k,v in elastic_config.items()}
         self.model.config.elastic_config = elastic_config
         # self.elastic_config = elastic_config
         self.local_grads = []
@@ -115,7 +116,7 @@ class OFM:
         if "sam" == self.model.config.model_type.lower():
             mask_layers(self.model, layers)
         else:
-            raise NotImplemented(f'Pruning not yet implemented for \
+            raise NotImplemented(f'Masking not yet implemented for \
                                  {self.model.config.model_type.lower()}')
     
     def remove_layers(self,layers):

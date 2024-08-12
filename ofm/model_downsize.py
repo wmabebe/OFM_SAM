@@ -109,6 +109,9 @@ def arc_config_sampler(elastic_config:dict, n_layer=12,smallest=False,largest=Fa
 
     assert smallest == False or largest == False  # Only one can be true
     assert len(elastic_config) == n_layer
+
+    print(f'n_layer : {n_layer}')
+    print(f'elastic_config : {elastic_config}')
     
     for layer in range(n_layer):
         if smallest:

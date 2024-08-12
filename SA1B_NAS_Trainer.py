@@ -299,7 +299,7 @@ class SA1B_NAS_Trainer:
                 do_save = ((idx + 1) % save_interval == 0)
 
                 # #Test when saving
-                #do_test = do_save
+                do_test = do_save
                                 
                 #Train largest submodel (= supernet)
                 if 'l' in self.sandwich:

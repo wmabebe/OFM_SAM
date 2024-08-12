@@ -51,7 +51,7 @@ if __name__ == '__main__':
     }
     elastic_config = {
         "atten_out_space": [768], #Don't go over 768
-        "inter_hidden_space": [768,1020,1536], #Reduce for minimizing model size
+        "inter_hidden_space": [768,1020,1536], #Reduce for minimizing model size [1536,2304]
         "residual_hidden": [1020],
     }
 
