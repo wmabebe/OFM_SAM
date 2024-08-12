@@ -111,6 +111,7 @@ def arc_config_sampler(elastic_config:dict, n_layer=12,smallest=False,largest=Fa
     assert len(elastic_config) == n_layer
     
     for layer in range(n_layer):
+        layer = str(layer)
         if smallest:
             inter_hidden = min(elastic_config[layer]["inter_hidden_space"])
             atten_out = min(elastic_config[layer]["atten_out_space"])
