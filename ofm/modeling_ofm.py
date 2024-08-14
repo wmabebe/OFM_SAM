@@ -155,26 +155,48 @@ class OFM:
         self.local_grads.append(local_grad)
         self.alphas.append(alpha)
 
-    def apply_grad(self, grad):
-        """Apply the gradients to the full-size model
+    def apply_grad(self, grad, removed_layer_idx=None):
+        """Apply the gradients to the full-size model, adjusting for removed layers.
 
         Args:
-            grad (dict): Trained downsized model gradients
+            grad (dict): Trained downsized model gradients.
+            removed_layer_idx (list of int, optional): List of layer indices that were removed 
+                                                    in the downsized model. Defaults to None.
         """
+        if removed_layer_idx is None:
+            removed_layer_idx = []
+
         self.model.to("cpu")
         with torch.no_grad():
             for name, param in self.model.named_parameters():
-                local_grad = grad[name].cpu()
-                slices = tuple(
-                    slice(0, min(sm_dim, lg_dim))
-                    for sm_dim, lg_dim in zip(local_grad.shape, param.shape)
-                )
-                if self._pre_global_grad:
-                    param[slice] -= (
-                        0.9 * local_grad + 0.1 * self._pre_global_grad[name][slice]
+                # Determine the original layer index
+                layer_idx = int(name.split('.')[2])
+
+                if layer_idx in removed_layer_idx:
+                    continue
+                
+                # Skip the removed layers
+                adjusted_layer_idx = layer_idx - sum(1 for removed_idx in removed_layer_idx if removed_idx < layer_idx)
+
+
+
+                # Replace the layer index in the name for fetching the correct gradient
+                grad_name = name.replace(f'.{layer_idx}.', f'.{adjusted_layer_idx}.')
+                
+                if grad_name in grad:
+                    local_grad = grad[grad_name].cpu()
+
+                    slices = tuple(
+                        slice(0, min(sm_dim, lg_dim))
+                        for sm_dim, lg_dim in zip(local_grad.shape, param.shape)
                     )
-                else:
-                    param[slices] -= local_grad
+
+                    if self._pre_global_grad:
+                        param[slices] -= (
+                            0.9 * local_grad + 0.1 * self._pre_global_grad[grad_name][slices]
+                        )
+                    else:
+                        param[slices] -= local_grad
 
     def apply_accumulate_grad(self, beta=0.5):
         self.grad_normalization()

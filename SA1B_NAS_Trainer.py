@@ -144,7 +144,7 @@ class SA1B_NAS_Trainer:
             for k, v in model.state_dict().items():
                 local_grad[f'vision_encoder.{k}'] = local_grad[f'vision_encoder.{k}'] - v.cpu()
 
-        self.supermodel.apply_grad(local_grad)
+        self.supermodel.apply_grad(local_grad,model.config.arch['remove_layer_idx'])
 
         train_metrics = {
             "train_loss": loss.sum().item(),
@@ -230,7 +230,7 @@ class SA1B_NAS_Trainer:
             for k, v in model.state_dict().items():
                 local_grad[k] = local_grad[k] - v.cpu()
 
-        self.supermodel.apply_grad(local_grad)
+        self.supermodel.apply_grad(local_grad,model.config.arch['remove_layer_idx'])
 
         train_metrics = {
             "train_loss": loss.sum().item(),
