@@ -3,7 +3,7 @@ import copy
 from torch import nn
 import torch
 import time
-from .utils import calculate_params
+from .utils import calculate_params,structured_pruning
 from peft import (
     PeftModel,
     PeftConfig,
@@ -24,7 +24,7 @@ __all__ = [
 ]
 
 
-def copy_weights_to_subnet(subnet, org_model):
+def copy_weights_to_subnet(subnet, org_model, remove_layer_idx):
     """
     Copies the weights from original foundation model to scaled subnet where the parameter names match.
     Only the overlapping parts of the weights are copied when the dimensions in the subnet
@@ -104,6 +104,7 @@ def arc_config_sampler(elastic_config:dict, n_layer=12,smallest=False,largest=Fa
     Returns:
         dic: Subnet architecture configure.
     """
+    
     arc_config = {}
     np.random.seed(int(time.time()))  # Set the seed to the current time
 
@@ -130,6 +131,26 @@ def arc_config_sampler(elastic_config:dict, n_layer=12,smallest=False,largest=Fa
             "inter_hidden": inter_hidden,
             "residual_hidden": elastic_config[layer]["residual_hidden"],
         }
+    
+    def sample_layer_indices(target_layer_idx, prob):
+        import random
+        sampled_layer_idx = []
+        for idx, p in zip(target_layer_idx, prob):
+            if random.random() < p:
+                sampled_layer_idx.append(idx)
+        return sampled_layer_idx
+
+    layer_elastic = elastic_config['layer_elastic']
+    if smallest:
+        remove_layer_idx = layer_elastic['elastic_layer_idx']
+    elif largest:
+        remove_layer_idx = []
+    else:
+        remove_layer_idx = sample_layer_indices(layer_elastic['elastic_layer_idx'], layer_elastic['remove_layer_prob'])
+    
+    arc_config['remove_layer_idx'] = remove_layer_idx
+    
+    
     return arc_config
 
 def clip_module_handler(model, arc_config):
@@ -612,9 +633,15 @@ def sam_module_handler(model, arc_config):
 
             self.lin1 = nn.Linear(config.hidden_size, config.mlp_dim)
             self.lin2 = nn.Linear(config.mlp_dim, config.hidden_size)
-
-    for i, (layer, key) in enumerate(zip(sam_vit_layers, arc_config)):
-        arc = arc_config[key]
+    
+    ## Remove layer index
+    remove_layer_idx = arc_config['remove_layer_idx']
+    # for i, (layer, key) in enumerate(zip(sam_vit_layers, arc_config)):
+    for i, layer in enumerate(sam_vit_layers):
+        if i in remove_layer_idx:
+            # for layer been pruned, simply skip it here
+            continue
+        arc = arc_config[str(i)]
         new_config = SamVisionConfig.from_dict(vision_encoder.config.to_dict())
 
         # new_config.hidden_size = arc  # Set to the new output dimension
@@ -636,7 +663,13 @@ def sam_module_handler(model, arc_config):
         layer.mlp = new_mlp
 
     sub_model.vision_encoder = vision_encoder
+    
+    
+    
+
     copy_weights_to_subnet(sub_model, model)
+    sub_model = structured_pruning(sub_model,remove_layer_idx,model.vision_encoder.config.global_attn_indexes)
+
     total_params = calculate_params(sub_model)
 
     return sub_model, total_params

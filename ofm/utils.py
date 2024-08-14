@@ -222,3 +222,37 @@ class Logger:
 
     def save_metrics(self, prefix, metrics):
         save_dict_to_file(metrics, os.path.join(self.log_dir, f"{prefix}.json"))
+
+
+def structured_pruning(model,layers_to_prune,global_attn_indexes):
+    """Prune the SAM model's vision encoder layers.
+
+    Args:
+        model (nn.module): SAM model.
+        layers_to_prune (list[int]): Indices of layers to remove.
+        global_attn_indexes (list[int]): Original SAM vision encoder global attention indices.
+
+    Returns:
+        (list[int],list[int]): Prunned layers and shifted global indices.
+    """
+    
+    #Assert layer indices are valid
+    for l in layers_to_prune:
+        assert l in list(range(len(model.vision_encoder.layers)))
+    
+    #Remove overlapping indices from global_attn_indexes
+    global_attn_indexes = [l for l in global_attn_indexes if l not in layers_to_prune]
+    
+    #Shift prunnable layers to left  Eg. layers 1,6,9 --> 1, 5, 7 
+    layers_to_prune = [i-idx for idx,i in enumerate(layers_to_prune)]
+
+    #Remove layers and shift global_attention indices accordingly
+    for l in layers_to_prune:
+        del model.vision_encoder.layers[l]
+        global_attn_indexes = [i-1 if i > l else i for i in global_attn_indexes]
+
+
+    model.vision_encoder.config.global_attn_indexes = global_attn_indexes
+    # model.vision_encoder.config.num_hidden_layers = 12 - len(layers_to_prune)
+
+    return layers_to_prune, global_attn_indexes
