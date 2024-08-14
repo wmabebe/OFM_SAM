@@ -24,7 +24,7 @@ __all__ = [
 ]
 
 
-def copy_weights_to_subnet(subnet, org_model, remove_layer_idx):
+def copy_weights_to_subnet(subnet, org_model):
     """
     Copies the weights from original foundation model to scaled subnet where the parameter names match.
     Only the overlapping parts of the weights are copied when the dimensions in the subnet
@@ -109,10 +109,10 @@ def arc_config_sampler(elastic_config:dict, n_layer=12,smallest=False,largest=Fa
     np.random.seed(int(time.time()))  # Set the seed to the current time
 
     assert smallest == False or largest == False  # Only one can be true
-    assert len(elastic_config) == n_layer
+    assert len(elastic_config) - 1 == n_layer
     
     for layer in range(n_layer):
-        #layer = str(layer)
+        layer = str(layer)
         if smallest:
             inter_hidden = min(elastic_config[layer]["inter_hidden_space"])
             atten_out = min(elastic_config[layer]["atten_out_space"])
@@ -123,7 +123,7 @@ def arc_config_sampler(elastic_config:dict, n_layer=12,smallest=False,largest=Fa
             inter_hidden = np.random.choice(elastic_config[layer]["inter_hidden_space"]).item()
             atten_out = np.random.choice(elastic_config[layer]["atten_out_space"]).item()
 
-        arc_config[f"layer_{layer + 1}"] = {
+        arc_config[f"{int(layer)}"] = {
             "atten_out": atten_out,
             "inter_hidden": inter_hidden,
             "residual_hidden": elastic_config[layer]["residual_hidden"],
@@ -633,6 +633,7 @@ def sam_module_handler(model, arc_config):
     
     ## Remove layer index
     remove_layer_idx = arc_config['remove_layer_idx']
+    print(f'arc_config : {arc_config}')
     # for i, (layer, key) in enumerate(zip(sam_vit_layers, arc_config)):
     for i, layer in enumerate(sam_vit_layers):
         if i in remove_layer_idx:
@@ -665,7 +666,7 @@ def sam_module_handler(model, arc_config):
     
 
     copy_weights_to_subnet(sub_model, model)
-    sub_model = structured_pruning(sub_model,remove_layer_idx,model.vision_encoder.config.global_attn_indexes)
+    sub_model, _, _ = structured_pruning(sub_model,remove_layer_idx,model.vision_encoder.config.global_attn_indexes)
 
     total_params = calculate_params(sub_model)
 

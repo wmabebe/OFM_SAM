@@ -255,4 +255,4 @@ def structured_pruning(model,layers_to_prune,global_attn_indexes):
     model.vision_encoder.config.global_attn_indexes = global_attn_indexes
     # model.vision_encoder.config.num_hidden_layers = 12 - len(layers_to_prune)
 
-    return layers_to_prune, global_attn_indexes
+    return model,layers_to_prune, global_attn_indexes

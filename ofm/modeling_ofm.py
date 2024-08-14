@@ -51,7 +51,7 @@ class OFM:
             elastic_config, dict
         ), "Invalid elastic_config, expect input a dictionary or file path"
 
-        elastic_config = {int(k):v for k,v in elastic_config.items()}
+        #elastic_config = {int(k):v for k,v in elastic_config.items()}
         self.model.config.elastic_config = elastic_config
         # self.elastic_config = elastic_config
         self.local_grads = []
