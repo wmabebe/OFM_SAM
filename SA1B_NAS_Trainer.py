@@ -306,7 +306,7 @@ class SA1B_NAS_Trainer:
                     submodel, submodel.config.num_parameters, submodel.config.arch = (
                             copy.deepcopy(self.supermodel.model),
                             self.supermodel.total_params,
-                            {},
+                            {'remove_layer_idx':[]},
                         )
                     
                     self.single_step(submodel,inputs,labels,'Largest',do_test,images, boxes, points)
