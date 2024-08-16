@@ -107,6 +107,8 @@ def show_anns(anns):
 
 
 def show_mask(mask, ax, random_color=False):
+    if isinstance(mask,torch.Tensor):
+        mask = mask.cpu().numpy()
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
     else:
@@ -190,7 +192,12 @@ def save_preds(map,folder):
 
 
         #Transpose image for plotting
-        img = img.transpose(1, 2, 0)
+        #img = img.transpose(1, 2, 0)
+        if isinstance(img, torch.Tensor):
+            img = img.permute(1, 2, 0)
+            img = img.cpu().numpy()
+        elif isinstance(img, np.ndarray):
+            img = img.transpose(1, 2, 0)
 
         axes[0].imshow(img)
         show_mask(gts, axes[0]) #plt.gca()
@@ -572,7 +579,8 @@ def plot_dist(score_dist,filename='score-dist.png',importance='Magnitude'):
 def none_skipper_collate(batch):
     "Puts each data field into a tensor with outer dimension batch size"
     batch = list(filter(lambda x : x is not None, batch))
-    return default_collate(batch)
+    return list(map(list, zip(*batch)))
+    #return default_collate(batch)
 
 def euclidean_distance(tensor1, tensor2):
     return torch.sqrt(torch.sum((tensor1 - tensor2) ** 2))

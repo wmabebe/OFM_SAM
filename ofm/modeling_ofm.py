@@ -169,6 +169,7 @@ class OFM:
         self.model.to("cpu")
         with torch.no_grad():
             for name, param in self.model.named_parameters():
+
                 # Determine the original layer index
                 layer_idx = int(name.split('.')[2])
 

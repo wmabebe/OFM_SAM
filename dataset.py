@@ -355,7 +355,7 @@ class COCOSegmentation(torch.utils.data.Dataset):
         self.img_dir = os.path.join(base_dir, '{}{}'.format(split, year))
         self.split = split
         self.coco = COCO(ann_file)
-        self.coco_mask = mask
+        self.coco_mask = mask_utils
         if os.path.exists(ids_file):
             self.ids = torch.load(ids_file)
         else:
@@ -416,15 +416,14 @@ class COCOSegmentation(torch.utils.data.Dataset):
             bbox_prompt = COCOSegmentation.get_bounding_box(mask)
             point_prompt = COCOSegmentation.get_random_prompt(mask,bbox_prompt)
 
-            
-
             # prepare image and prompt for the model
             inputs = self.processor(img, input_points=[[point_prompt]], input_boxes=[[bbox_prompt]], return_tensors="pt")
 
             # remove batch dimension which the processor adds by default
             inputs = {k:v.squeeze(0) for k,v in inputs.items()}
 
-            return inputs, mask
+            #return inputs, mask
+            return inputs, img, mask, bbox_prompt,  point_prompt
         else:
             return sample
 
