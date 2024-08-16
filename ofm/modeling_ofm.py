@@ -170,7 +170,13 @@ class OFM:
         with torch.no_grad():
             for name, param in self.model.named_parameters():
                 # Determine the original layer index
-                layer_idx = int(name.split('.')[2])
+                if 'layers' not in name:
+                    continue 
+                try:
+                    layer_idx = int(name.split('.')[2])
+                except:
+                    continue
+                
 
                 if layer_idx in removed_layer_idx:
                     continue
