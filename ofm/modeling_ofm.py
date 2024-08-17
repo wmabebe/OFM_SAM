@@ -171,8 +171,8 @@ class OFM:
             for name, param in self.model.named_parameters():
 
                 # Determine the original layer index
-                if 'layers' in name:
-                    layer_idx = int(name.split('.')[3])
+                if 'vision_encoder.layers' in name:
+                    layer_idx = int(name.split('.')[2])
                 else:
                     layer_idx = None
                     # continue
