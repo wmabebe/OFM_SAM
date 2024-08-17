@@ -131,7 +131,8 @@ if __name__ == '__main__':
         #dataset = COCOSegmentation('datasets/coco','val', processor=processor)
         args.base_size = 513
         args.crop_size = 513
-        dataset = COCOSegmentation(args,f'{DATA_ROOT}coco','val', '2017', processor=processor)
+        train_dataset = COCOSegmentation(args,f'{DATA_ROOT}coco','train', '2017', processor=processor)
+        test_dataset = COCOSegmentation(args,f'{DATA_ROOT}coco','val', '2017', processor=processor)
         #test_dataset = COCOSegmentation('datasets/coco','val')
 
         reordering_dataset =  COCOSegmentation(args,f'{DATA_ROOT}coco','val', '2017', processor=processor)
@@ -141,19 +142,19 @@ if __name__ == '__main__':
 
         # Apply subset for shorter training
         if args.train_subset:
-            subset_dataset = Subset(dataset, indices=range(0,args.train_subset,1))
+            subset_dataset = Subset(train_dataset, indices=range(0,args.train_subset,1))
             train_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=none_skipper_collate) #collate_fn = custom_collate_fn
         
         else:
-            subset_dataset = Subset(dataset, indices=range(0,3000,1))
-            train_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=True, drop_last=False, collate_fn=none_skipper_collate)
+            #subset_dataset = Subset(train_dataset, indices=range(0,3000,1))
+            train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, drop_last=False, collate_fn=none_skipper_collate)
         
         if args.test_subset:
-            subset_dataset = Subset(dataset, indices=range(args.train_subset,args.train_subset + args.test_subset,1))
+            subset_dataset = Subset(test_dataset, indices=range(0,args.test_subset,1))
             test_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True, collate_fn=none_skipper_collate) #collate_fn = custom_collate_fn
         else:
-            subset_dataset = Subset(dataset, indices=range(3000,len(dataset),1))
-            test_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True, collate_fn=none_skipper_collate)
+            #subset_dataset = Subset(dataset, indices=range(3000,len(dataset),1))
+            test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True, collate_fn=none_skipper_collate)
 
     #args.logger.info(f'Dataset : {len(dataset)}')
     args.logger.info(f'trainloader : {len(train_dataloader)} x batch_size : {args.batch_size}')
@@ -195,36 +196,36 @@ if __name__ == '__main__':
     # #save_preds(map,'Pretrained')
 
 
-    # start_test = timeit.default_timer()
-    # #miou, mious, map = eval(args.supermodel.model,test_dataloader,disable_verbose=args.no_verbose,processor=processor,prompt=args.test_prompt)
-    # miou, mious, map = trainer.eval(args.supermodel.model)
-    # end_test = timeit.default_timer()
-    # #sorted_mious, indices = torch.sort(mious)
-    # #args.logger.info(f'supermodel pre-NAS IoUs: {sorted_mious}')
-    # args.logger.info(f'supermodel size : {count_parameters(args.supermodel.model)} params \t pre-NAS mIoU : {miou}% \t time: {round(end_test - start_test,4)} seconds')
-    # #save_preds(map,'Largest')
+    start_test = timeit.default_timer()
+    #miou, mious, map = eval(args.supermodel.model,test_dataloader,disable_verbose=args.no_verbose,processor=processor,prompt=args.test_prompt)
+    miou, mious, map = trainer.eval(args.supermodel.model)
+    end_test = timeit.default_timer()
+    #sorted_mious, indices = torch.sort(mious)
+    #args.logger.info(f'supermodel pre-NAS IoUs: {sorted_mious}')
+    args.logger.info(f'supermodel size : {count_parameters(args.supermodel.model)} params \t pre-NAS mIoU : {miou}% \t time: {round(end_test - start_test,4)} seconds')
+    #save_preds(map,'Largest')
 
 
-    # #save_preds(map,'Largest')
-    # submodel, submodel.config.num_parameters, submodel.config.arch = args.supermodel.smallest_model()
-    # start_test = timeit.default_timer()
-    # #miou, mious, map = eval(submodel,test_dataloader,disable_verbose=args.no_verbose,processor=processor,prompt=args.test_prompt)
-    # miou, mious, map = trainer.eval(submodel)
-    # end_test = timeit.default_timer()
-    # #sorted_mious, indices = torch.sort(mious)
-    # #args.logger.info(f'smallest pre-NAS IoUs: {sorted_mious}')
-    # args.logger.info(f'smallest model size : {count_parameters(submodel)} params \t  pre-NAS mIoU : {miou}% \t time: {round(end_test - start_test,4)} seconds')
-    # #save_preds(map,'Smallest')
+    #save_preds(map,'Largest')
+    submodel, submodel.config.num_parameters, submodel.config.arch = args.supermodel.smallest_model()
+    start_test = timeit.default_timer()
+    #miou, mious, map = eval(submodel,test_dataloader,disable_verbose=args.no_verbose,processor=processor,prompt=args.test_prompt)
+    miou, mious, map = trainer.eval(submodel)
+    end_test = timeit.default_timer()
+    #sorted_mious, indices = torch.sort(mious)
+    #args.logger.info(f'smallest pre-NAS IoUs: {sorted_mious}')
+    args.logger.info(f'smallest model size : {count_parameters(submodel)} params \t  pre-NAS mIoU : {miou}% \t time: {round(end_test - start_test,4)} seconds')
+    #save_preds(map,'Smallest')
     
-    # submodel, submodel.config.num_parameters, submodel.config.arch = args.supermodel.random_resource_aware_model()
-    # start_test = timeit.default_timer()
-    # #miou, mious, map = eval(submodel,test_dataloader,disable_verbose=args.no_verbose,processor=processor,prompt=args.test_prompt)
-    # miou, mious, map = trainer.eval(submodel)
-    # end_test = timeit.default_timer()
-    # #sorted_mious, indices = torch.sort(mious)
-    # #args.logger.info(f'medium pre-NAS IoUs: {sorted_mious}')
-    # args.logger.info(f'medium model size : {count_parameters(submodel)} params \t pre-NAS mIoU : {miou}% \t time: {round(end_test - start_test,4)} seconds')
-    # #save_preds(map,'Medium')
+    submodel, submodel.config.num_parameters, submodel.config.arch = args.supermodel.random_resource_aware_model()
+    start_test = timeit.default_timer()
+    #miou, mious, map = eval(submodel,test_dataloader,disable_verbose=args.no_verbose,processor=processor,prompt=args.test_prompt)
+    miou, mious, map = trainer.eval(submodel)
+    end_test = timeit.default_timer()
+    #sorted_mious, indices = torch.sort(mious)
+    #args.logger.info(f'medium pre-NAS IoUs: {sorted_mious}')
+    args.logger.info(f'medium model size : {count_parameters(submodel)} params \t pre-NAS mIoU : {miou}% \t time: {round(end_test - start_test,4)} seconds')
+    #save_preds(map,'Medium')
 
 
     args.logger.info(f'NAS Training starts')

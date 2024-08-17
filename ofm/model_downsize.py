@@ -633,7 +633,7 @@ def sam_module_handler(model, arc_config):
     
     ## Remove layer index
     remove_layer_idx = arc_config['remove_layer_idx']
-    print(f'arc_config : {arc_config}')
+    # print(f'arc_config : {arc_config}')
     # for i, (layer, key) in enumerate(zip(sam_vit_layers, arc_config)):
     for i, layer in enumerate(sam_vit_layers):
         if i in remove_layer_idx:

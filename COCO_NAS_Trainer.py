@@ -190,6 +190,10 @@ class COCO_NAS_Trainer:
 
             start_epoch = timeit.default_timer()
             for idx, batch in enumerate(tqdm(self.train_dataloader, disable=self.no_verbose)):
+                
+                #Skip empty batch
+                if not len(batch):
+                    continue
 
                 #Reorder mlp layers for every batch 
                 if self.reorder == 'per_batch':
