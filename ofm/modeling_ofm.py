@@ -171,25 +171,27 @@ class OFM:
             for name, param in self.model.named_parameters():
 
                 # Determine the original layer index
-                if 'layers' not in name:
-                    continue 
-                try:
+                if 'layers' in name:
                     layer_idx = int(name.split('.')[2])
-                except:
-                    continue
+                else:
+                    layer_idx = None
+                    # continue
                 
 
-                if layer_idx in removed_layer_idx:
-                    continue
+                if layer_idx:
+                    if layer_idx in removed_layer_idx:
+                        continue
                 
-                # Skip the removed layers
-                adjusted_layer_idx = layer_idx - sum(1 for removed_idx in removed_layer_idx if removed_idx < layer_idx)
+                    # Skip the removed layers
+                    adjusted_layer_idx = layer_idx - sum(1 for removed_idx in removed_layer_idx if removed_idx < layer_idx)
 
 
 
-                # Replace the layer index in the name for fetching the correct gradient
-                grad_name = name.replace(f'.{layer_idx}.', f'.{adjusted_layer_idx}.')
-                
+                    # Replace the layer index in the name for fetching the correct gradient
+                    grad_name = name.replace(f'.{layer_idx}.', f'.{adjusted_layer_idx}.')
+                else:
+                    grad_name = name
+                        
                 if grad_name in grad:
                     local_grad = grad[grad_name].cpu()
 
