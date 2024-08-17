@@ -172,7 +172,7 @@ class OFM:
 
                 # Determine the original layer index
                 if 'layers' in name:
-                    layer_idx = int(name.split('.')[2])
+                    layer_idx = int(name.split('.')[3])
                 else:
                     layer_idx = None
                     # continue
