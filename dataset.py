@@ -248,94 +248,6 @@ class MitoDataset(torch.utils.data.Dataset):
         inputs = {k:v.squeeze(0) for k,v in inputs.items()}
 
         return inputs, ground_truth_mask
-    
-class SegmentationDataset(object):
-    """Segmentation Base Dataset"""
-
-    def __init__(self, root, split, mode, transform, base_size=520, crop_size=480):
-        super(SegmentationDataset, self).__init__()
-        self.root = root
-        self.transform = transform
-        self.split = split
-        self.mode = mode if mode is not None else split
-        self.base_size = base_size
-        self.crop_size = crop_size
-
-    def _val_sync_transform(self, img, mask):
-        outsize = self.crop_size
-        short_size = outsize
-        w, h = img.size
-        if w > h:
-            oh = short_size
-            ow = int(1.0 * w * oh / h)
-        else:
-            ow = short_size
-            oh = int(1.0 * h * ow / w)
-        img = img.resize((ow, oh), Image.BILINEAR)
-        mask = mask.resize((ow, oh), Image.NEAREST)
-        # center crop
-        w, h = img.size
-        x1 = int(round((w - outsize) / 2.))
-        y1 = int(round((h - outsize) / 2.))
-        img = img.crop((x1, y1, x1 + outsize, y1 + outsize))
-        mask = mask.crop((x1, y1, x1 + outsize, y1 + outsize))
-        # final transform
-        img, mask = self._img_transform(img), self._mask_transform(mask)
-        return img, mask
-
-    def _sync_transform(self, img, mask):
-        # random mirror
-        if random.random() < 0.5:
-            img = img.transpose(Image.FLIP_LEFT_RIGHT)
-            mask = mask.transpose(Image.FLIP_LEFT_RIGHT)
-        crop_size = self.crop_size
-        # random scale (short edge)
-        short_size = random.randint(int(self.base_size * 0.5), int(self.base_size * 2.0))
-        w, h = img.size
-        if h > w:
-            ow = short_size
-            oh = int(1.0 * h * ow / w)
-        else:
-            oh = short_size
-            ow = int(1.0 * w * oh / h)
-        img = img.resize((ow, oh), Image.BILINEAR)
-        mask = mask.resize((ow, oh), Image.NEAREST)
-        # pad crop
-        if short_size < crop_size:
-            padh = crop_size - oh if oh < crop_size else 0
-            padw = crop_size - ow if ow < crop_size else 0
-            img = ImageOps.expand(img, border=(0, 0, padw, padh), fill=0)
-            mask = ImageOps.expand(mask, border=(0, 0, padw, padh), fill=0)
-        # random crop crop_size
-        w, h = img.size
-        x1 = random.randint(0, w - crop_size)
-        y1 = random.randint(0, h - crop_size)
-        img = img.crop((x1, y1, x1 + crop_size, y1 + crop_size))
-        mask = mask.crop((x1, y1, x1 + crop_size, y1 + crop_size))
-        # gaussian blur as in PSP
-        if random.random() < 0.5:
-            img = img.filter(ImageFilter.GaussianBlur(radius=random.random()))
-        # final transform
-        img, mask = self._img_transform(img), self._mask_transform(mask)
-        return img, mask
-
-    def _img_transform(self, img):
-        return np.array(img)
-
-    def _mask_transform(self, mask):
-        return np.array(mask).astype('int32')
-
-    @property
-    def num_class(self):
-        """Number of categories."""
-        return self.NUM_CLASS
-
-    @property
-    def pred_offset(self):
-        return 0
-
-
-# ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 class COCOSegmentation(torch.utils.data.Dataset):
@@ -348,6 +260,7 @@ class COCOSegmentation(torch.utils.data.Dataset):
                  base_dir='datasets/coco',
                  split='train',
                  year='2017',
+                 labels='one',
                  processor=None):
         super().__init__()
         ann_file = os.path.join(base_dir, 'annotations/instances_{}{}.json'.format(split, year))
@@ -363,6 +276,7 @@ class COCOSegmentation(torch.utils.data.Dataset):
             self.ids = self._preprocess(ids, ids_file)
         self.args = args
         self.processor = processor
+        self.labels = labels
         self.mask_idx = 0 if split == 'val' else 1
     
     @staticmethod
@@ -394,38 +308,29 @@ class COCOSegmentation(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         _img, _target = self._make_img_gt_point_pair(index,self.mask_idx)
-        sample = {'image': _img, 'label': _target}
-
-        if self.split == "train":
-            sample =  self.transform_tr(sample)
-        elif self.split == 'val':
-            sample = self.transform_val(sample)
         
-        if self.processor:
-            image, mask = sample['image'], sample['label']
+        image, mask = np.array(_img), np.array(_target)
+        image = np.moveaxis(image, -1, 0)
 
-            if not torch.any(mask):
-                return None
+        if not np.any(mask):
+            return None
 
-            img = (image - image.min()) / (image.max() - image.min())
+        mask = torch.tensor(mask)
+        #binarize mask
+        mask = (mask > 0).float()
 
-            mask = torch.tensor(mask)
-            #binarize mask
-            mask = (mask > 0).float()
+        bbox_prompt = COCOSegmentation.get_bounding_box(mask)
+        point_prompt = COCOSegmentation.get_random_prompt(mask,bbox_prompt)
 
-            bbox_prompt = COCOSegmentation.get_bounding_box(mask)
-            point_prompt = COCOSegmentation.get_random_prompt(mask,bbox_prompt)
+        # prepare image and prompt for the model
+        inputs = self.processor(image, input_points=[[point_prompt]], input_boxes=[[bbox_prompt]], return_tensors="pt")
 
-            # prepare image and prompt for the model
-            inputs = self.processor(img, input_points=[[point_prompt]], input_boxes=[[bbox_prompt]], return_tensors="pt")
+        # remove batch dimension which the processor adds by default
+        inputs = {k:v.squeeze(0) for k,v in inputs.items()}
 
-            # remove batch dimension which the processor adds by default
-            inputs = {k:v.squeeze(0) for k,v in inputs.items()}
+        #return inputs, mask
+        return inputs, image, mask, bbox_prompt,  point_prompt
 
-            #return inputs, mask
-            return inputs, img, mask, bbox_prompt,  point_prompt
-        else:
-            return sample
 
     def _make_img_gt_point_pair(self, index, mask_idx=0):
         coco = self.coco
@@ -444,6 +349,21 @@ class COCOSegmentation(torch.utils.data.Dataset):
             cocotarget, img_metadata['height'], img_metadata['width']))
 
         return _img, _target
+
+    def _make_img_gts_pair(self,index):
+        coco = self.coco
+        img_id = self.ids[index]
+        img_metadata = coco.loadImgs(img_id)[0]
+        path = img_metadata['file_name']
+        _img = Image.open(os.path.join(self.img_dir, path)).convert('RGB')
+        annids = coco.getAnnIds(imgIds=img_id)
+        _targets = []
+        for annid in annids:
+            cocotarget = coco.loadAnns(annid)
+            _targets.append(Image.fromarray(self._gen_seg_mask(
+            cocotarget, img_metadata['height'], img_metadata['width'])))
+        
+        return _img, _targets
 
     def _preprocess(self, ids, ids_file):
         print("Preprocessing mask, this will take a while. " + \
@@ -484,10 +404,10 @@ class COCOSegmentation(torch.utils.data.Dataset):
 
     def transform_tr(self, sample):
         composed_transforms = transforms.Compose([
-            tr.RandomHorizontalFlip(),
-            tr.RandomScaleCrop(base_size=self.args.base_size, crop_size=self.args.crop_size),
-            tr.RandomGaussianBlur(),
-            tr.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+            # tr.RandomHorizontalFlip(),
+            # tr.RandomScaleCrop(base_size=self.args.base_size, crop_size=self.args.crop_size),
+            # tr.RandomGaussianBlur(),
+            # tr.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
             tr.ToTensor()])
         
         return composed_transforms(sample)
@@ -495,8 +415,8 @@ class COCOSegmentation(torch.utils.data.Dataset):
     def transform_val(self, sample):
 
         composed_transforms = transforms.Compose([
-            tr.FixScaleCrop(crop_size=self.args.crop_size),
-            tr.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+            # tr.FixScaleCrop(crop_size=self.args.crop_size),
+            # tr.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
             tr.ToTensor()])
 
         return composed_transforms(sample)
