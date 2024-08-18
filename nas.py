@@ -137,24 +137,24 @@ if __name__ == '__main__':
 
         reordering_dataset =  COCOSegmentation(args,f'{DATA_ROOT}coco','val', '2017', processor=processor)
         subset_dataset = Subset(reordering_dataset, indices=range(0,32 * args.batch_size,1))
-        reorder_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=True, drop_last=False, collate_fn=none_skipper_collate)
+        reorder_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=True, drop_last=False, collate_fn=sa1b_collate_fn) #none_skipper_collate
         args.reorder_dataloader = reorder_dataloader
 
         # Apply subset for shorter training
         if args.train_subset:
             subset_dataset = Subset(train_dataset, indices=range(0,args.train_subset,1))
-            train_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=none_skipper_collate) #collate_fn = custom_collate_fn
+            train_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=sa1b_collate_fn) #collate_fn = custom_collate_fn
         
         else:
             #subset_dataset = Subset(train_dataset, indices=range(0,3000,1))
-            train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, drop_last=False, collate_fn=none_skipper_collate)
+            train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, drop_last=False, collate_fn=sa1b_collate_fn)
         
         if args.test_subset:
             subset_dataset = Subset(test_dataset, indices=range(0,args.test_subset,1))
-            test_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True, collate_fn=none_skipper_collate) #collate_fn = custom_collate_fn
+            test_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True, collate_fn=sa1b_collate_fn) #collate_fn = custom_collate_fn
         else:
             #subset_dataset = Subset(dataset, indices=range(3000,len(dataset),1))
-            test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True, collate_fn=none_skipper_collate)
+            test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True, collate_fn=sa1b_collate_fn)
 
     #args.logger.info(f'Dataset : {len(dataset)}')
     args.logger.info(f'trainloader : {len(train_dataloader)} x batch_size : {args.batch_size}')

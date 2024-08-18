@@ -31,12 +31,14 @@ class SA1B_NAS_Trainer:
         mIoU = []
         model.eval()
         model = nn.DataParallel(model).to(self.device)
-        for idx,(inputs, images, labels, boxes, points) in enumerate(tqdm(self.test_dataloader, disable=self.no_verbose)): 
+        for idx,(inputs, images, labels, boxes, points) in enumerate(self.test_dataloader): #enumerate(tqdm(self.test_dataloader, disable=self.no_verbose)): 
 
             torch.cuda.empty_cache()
 
             #Set num_objects to 32 or num of points in the data with fewest points
             num_objects = min(self.prompt_batch_size, min([len(pts) for pts in points]))
+
+            print(f'num_objects : {num_objects}')
 
             # Filter num_objects prompt indices from points and boxes
             input_boxes, input_points = [], []
