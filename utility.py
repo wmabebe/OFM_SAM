@@ -159,6 +159,7 @@ def show_points(coords, labels, ax, marker_size=375):
 
 
 def show_box(box, ax, label="",linecolor=[]):
+    print(f'box : {box}')
     x0, y0 = box[0], box[1]
     w, h = box[2] - box[0], box[3] - box[1]
     ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='black', facecolor=(0,0,0,0), lw=5))
@@ -177,11 +178,11 @@ def save_preds(map,folder):
     for name, (img,point_prompt,box_prompt,gts,pred,iou) in map.items():
         fig, axes = plt.subplots(1, 2, figsize=(20, 10))
 
-        print(f'img {img.shape}')
-        print(f'point prompt {point_prompt} shape = {point_prompt.shape}')
-        print(f'box prompt {box_prompt} shape = {box_prompt.shape}')
-        print(f'gts {gts.shape}')
-        print(f'pred {pred.shape}')
+        # print(f'img {img.shape}')
+        # print(f'point prompt {point_prompt} shape = {point_prompt.shape}')
+        # print(f'box prompt {box_prompt} shape = {box_prompt.shape}')
+        # print(f'gts {gts.shape}')
+        # print(f'pred {pred.shape}')
 
         # point_prompt = point_prompt.squeeze(0)
         point_prompt = point_prompt.numpy()
@@ -510,7 +511,7 @@ def get_optimizer_and_scheduler(params,lr=1e-5,weight_decay=0,scheduler=None):
         weight_decay=weight_decay,
     )
     if not scheduler:
-        lower_bound_lr = lr / 1000
+        lower_bound_lr = lr / 100
         scheduler = LambdaLR(optimizer, lr_lambda=lambda x: max(lower_bound_lr, 0.975**x))
     else:
         scheduler.optimizer = optimizer

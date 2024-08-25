@@ -234,7 +234,7 @@ class COCOSegmentation(torch.utils.data.Dataset):
                  base_dir='datasets/coco',
                  split='train',
                  year='2017',
-                 labels='one',
+                 labels=4,
                  processor=None):
         super().__init__()
         ann_file = os.path.join(base_dir, 'annotations/instances_{}{}.json'.format(split, year))
@@ -277,19 +277,25 @@ class COCOSegmentation(torch.utils.data.Dataset):
             x = np.random.randint(x_min, x_max)
             y = np.random.randint(y_min, y_max)
             # Check if the point lies inside the mask
-            if ground_truth_map[y, x] == 1:
+            if ground_truth_map[y, x] > 0:
                 return x, y
 
+
     def __getitem__(self, index):
+        #Grab image and associated masks
         _img, _target = self._make_img_gts_pair(index)
+        #Resize image, masks to size 256x256
+        _img, _target = resize_image_and_mask(_img,_target)
         
         image, masks = np.array(_img), [np.array(t) for t in _target]
         image = np.moveaxis(image, -1, 0)
 
-
-        masks = [torch.tensor(mask) for mask in masks if np.any(mask)]
         #binarize mask
-        masks = [(mask > 0).float() for mask in masks]
+        masks = [(mask > 0).astype(float) for mask in masks]
+
+        masks = [torch.tensor(mask) for mask in masks if np.sum(mask) > 25]
+
+        masks = self.filter_n_masks(masks)
 
         if self.split == 'val':
             points, boxes = [], []
@@ -300,7 +306,16 @@ class COCOSegmentation(torch.utils.data.Dataset):
                 boxes.append(bbox_prompt)
         
             inputs = self.processor(image, input_points=points, input_boxes=[[boxes]], return_tensors="pt")
-            return inputs, image, masks, boxes,  points
+            # remove batch dimension which the processor adds by default
+            inputs = {k:v.squeeze(0) for k,v in inputs.items()}
+
+            #attach stuff to inputs
+            inputs["ground_truth_masks"] = torch.stack([torch.tensor(mask) for mask in masks])
+            inputs["boxes"] = torch.stack([torch.tensor(box) for box in boxes])
+            inputs["points"] = torch.stack([torch.tensor(point) for point in points])
+            inputs["img_id"] = index
+
+            return inputs, image #, masks, boxes,  points
                 
         elif self.split == 'train':
             points, boxes = [], []
@@ -309,9 +324,37 @@ class COCOSegmentation(torch.utils.data.Dataset):
                 point_prompt = COCOSegmentation.get_random_prompt(mask,bbox_prompt)
                 points.append([point_prompt])
                 boxes.append(bbox_prompt)
-                
-            inputs = self.processor(image, input_points=[points], input_boxes=[[boxes]], return_tensors="pt")
-            return inputs, image, masks, boxes,  points
+            
+            inputs = self.processor(image, input_points=[points], input_boxes=[[boxes]], return_tensors="pt") #Add input_boxes=[[boxes]]
+
+            # remove batch dimension which the processor adds by default
+            inputs = {k:v.squeeze(0) for k,v in inputs.items()}
+
+            #attach stuff to inputs
+            inputs["ground_truth_masks"] = torch.stack([torch.tensor(mask) for mask in masks])
+            inputs["boxes"] = torch.stack([torch.tensor(box) for box in boxes])
+            inputs["points"] = torch.stack([torch.tensor(point) for point in points])
+            inputs["img_id"] = index
+
+            return inputs, image #, masks, boxes,  points
+
+    def filter_n_masks(self,masks):
+        #Random trimming for train data points
+        if self.split == 'train':
+            if len(masks) < self.labels:
+                while len(masks) < self.labels:
+                    masks.append(random.choice(masks))
+            elif len(masks) > self.labels:
+                while len(masks) > 4:
+                    masks.pop(random.randint(0, len(masks) - 1))
+        #Fixed trimming for val data points
+        if self.split == 'val':
+            if len(masks) < self.labels:
+                while len(masks) < self.labels:
+                    masks.append(masks[0])
+            elif len(masks) > self.labels:
+                masks = masks[:4]
+        return masks
 
 
     def _make_img_gt_point_pair(self, index, mask_idx=0):
@@ -322,7 +365,7 @@ class COCOSegmentation(torch.utils.data.Dataset):
         _img = Image.open(os.path.join(self.img_dir, path)).convert('RGB')
         annids = coco.getAnnIds(imgIds=img_id)
         if mask_idx == 0:
-            annid = annids[0] 
+            annid = annids[0]
         else:
             idx = random.randint(0, len(annids) - 1)
             annid = annids[idx] 
@@ -386,3 +429,14 @@ class COCOSegmentation(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.ids)
+    
+def resize_image_and_mask(image, mask, target_size=(256, 256)):
+    #Resize PIL image, mask pair
+    # Resize both image and mask to the target size
+    resized_image = image.resize(target_size, Image.BILINEAR)
+    if isinstance(mask, Image.Image):
+        resized_mask = mask.resize(target_size, Image.NEAREST)  # Use NEAREST for mask to preserve label values
+    elif isinstance(mask,list):
+        resized_mask = [m.resize(target_size, Image.NEAREST) for m in mask]
+    
+    return resized_image, resized_mask
