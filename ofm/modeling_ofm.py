@@ -35,10 +35,12 @@ class OFM:
         if not elastic_config:
             # set defalt search space configuration (this is defalt setting for bert)
             elastic_config = {
-                "atten_out_space": [768],
-                "inter_hidden_space": [3072, 1920, 1280],
-                "residual_hidden_space": [768],
-            }
+                0:  {
+                        "atten_out_space": [768],
+                        "inter_hidden_space": [3072, 1920, 1280],
+                        "residual_hidden_space": [768],
+                    }
+                }
             print(
                 f"[Warning]: No elastic configuration provides. Set to the defalt elastic space {elastic_config}."
             )
@@ -49,6 +51,7 @@ class OFM:
             elastic_config, dict
         ), "Invalid elastic_config, expect input a dictionary or file path"
 
+        #elastic_config = {int(k):v for k,v in elastic_config.items()}
         self.model.config.elastic_config = elastic_config
         # self.elastic_config = elastic_config
         self.local_grads = []
@@ -71,30 +74,8 @@ class OFM:
 
         if "sam" == self.model.config.model_type.lower():
             arc_config = arc_config_sampler(
-                **self.model.config.elastic_config,
+                self.model.config.elastic_config,
                 n_layer=self.model.vision_encoder.config.num_hidden_layers,
-            )
-        elif "swin" == self.model.config.model_type.lower():
-            arc_config = arc_config_sampler(
-                **self.model.config.elastic_config,
-                n_layer=self.model.config.depths[-2],
-            )
-
-        elif "clip" == self.model.config.model_type.lower():
-            text_arc_config = arc_config_sampler(
-                **self.model.config.elastic_config["text"],
-                n_layer=self.model.config.text_config.num_hidden_layers,
-            )
-            vision_arc_config = arc_config_sampler(
-                **self.model.config.elastic_config["vision"],
-                smallest=True,
-                n_layer=self.model.config.vision_config.num_hidden_layers,
-            )
-            arc_config = (text_arc_config, vision_arc_config)
-        else:
-            arc_config = arc_config_sampler(
-                **self.model.config.elastic_config,
-                n_layer=self.model.config.num_hidden_layers,
             )
 
         subnetwork, total_params = self.resource_aware_model(arc_config)
@@ -112,36 +93,11 @@ class OFM:
 
         if "sam" == self.model.config.model_type.lower():
             arc_config = arc_config_sampler(
-                **self.model.config.elastic_config,
+                self.model.config.elastic_config,
                 smallest=True,
                 n_layer=self.model.vision_encoder.config.num_hidden_layers,
             )
-        elif "swin" == self.model.config.model_type.lower():
-            arc_config = arc_config_sampler(
-                **self.model.config.elastic_config,
-                smallest=True,
-                n_layer=self.model.config.depths[-2],
-            )
-
-        elif "clip" == self.model.config.model_type.lower():
-            text_arc_config = arc_config_sampler(
-                **self.model.config.elastic_config["text"],
-                n_layer=self.model.config.text_config.num_hidden_layers,
-                smallest=True,
-            )
-            vision_arc_config = arc_config_sampler(
-                **self.model.config.elastic_config["vision"],
-                smallest=True,
-                n_layer=self.model.config.vision_config.num_hidden_layers,
-            )
-            arc_config = (text_arc_config, vision_arc_config)
-
-        else:
-            arc_config = arc_config_sampler(
-                **self.model.config.elastic_config,
-                smallest=True,
-                n_layer=self.model.config.num_hidden_layers,
-            )
+        
         subnetwork, params = self.resource_aware_model(arc_config)
         return subnetwork, params, arc_config
 
@@ -157,10 +113,18 @@ class OFM:
                                  {self.model.config.model_type.lower()}')
     
     def mask_layers(self,layers):
-        mask_layers(self.model, layers)
+        if "sam" == self.model.config.model_type.lower():
+            mask_layers(self.model, layers)
+        else:
+            raise NotImplemented(f'Masking not yet implemented for \
+                                 {self.model.config.model_type.lower()}')
     
     def remove_layers(self,layers):
-        remove_layers(self.model, layers)
+        if "sam" == self.model.config.model_type.lower():
+            remove_layers(self.model, layers)
+        else:
+            raise NotImplemented(f'Pruning not yet implemented for \
+                                 {self.model.config.model_type.lower()}')
 
     def resource_aware_model(self, arc_config):
         if "bert" == self.model.config.model_type.lower():
@@ -191,26 +155,57 @@ class OFM:
         self.local_grads.append(local_grad)
         self.alphas.append(alpha)
 
-    def apply_grad(self, grad):
-        """Apply the gradients to the full-size model
+    def apply_grad(self, grad, removed_layer_idx=None):
+        """Apply the gradients to the full-size model, adjusting for removed layers.
 
         Args:
-            grad (dict): Trained downsized model gradients
+            grad (dict): Trained downsized model gradients.
+            removed_layer_idx (list of int, optional): List of layer indices that were removed 
+                                                    in the downsized model. Defaults to None.
         """
+        if removed_layer_idx is None:
+            removed_layer_idx = []
+
         self.model.to("cpu")
         with torch.no_grad():
             for name, param in self.model.named_parameters():
-                local_grad = grad[name].cpu()
-                slices = tuple(
-                    slice(0, min(sm_dim, lg_dim))
-                    for sm_dim, lg_dim in zip(local_grad.shape, param.shape)
-                )
-                if self._pre_global_grad:
-                    param[slice] -= (
-                        0.9 * local_grad + 0.1 * self._pre_global_grad[name][slice]
-                    )
+
+                # Determine the original layer index
+                if 'vision_encoder.layers' in name:
+                    layer_idx = int(name.split('.')[2])
                 else:
-                    param[slices] -= local_grad
+                    layer_idx = None
+                    # continue
+                
+
+                if layer_idx:
+                    if layer_idx in removed_layer_idx:
+                        continue
+                
+                    # Skip the removed layers
+                    adjusted_layer_idx = layer_idx - sum(1 for removed_idx in removed_layer_idx if removed_idx < layer_idx)
+
+
+
+                    # Replace the layer index in the name for fetching the correct gradient
+                    grad_name = name.replace(f'.{layer_idx}.', f'.{adjusted_layer_idx}.')
+                else:
+                    grad_name = name
+                        
+                if grad_name in grad:
+                    local_grad = grad[grad_name].cpu()
+
+                    slices = tuple(
+                        slice(0, min(sm_dim, lg_dim))
+                        for sm_dim, lg_dim in zip(local_grad.shape, param.shape)
+                    )
+
+                    if self._pre_global_grad:
+                        param[slices] -= (
+                            0.9 * local_grad + 0.1 * self._pre_global_grad[grad_name][slices]
+                        )
+                    else:
+                        param[slices] -= local_grad
 
     def apply_accumulate_grad(self, beta=0.5):
         self.grad_normalization()

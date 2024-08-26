@@ -7,12 +7,9 @@ from PIL import Image
 import json
 from pycocotools import mask as mask_utils
 import random
-from PIL import Image, ImageOps, ImageFilter
+from PIL import Image
 from pycocotools.coco import COCO
-from torchvision import transforms
-import custom_transforms as tr
 from tqdm import trange
-import pickle
 
 
 class SA1BDataset(torch.utils.data.Dataset):
@@ -135,7 +132,6 @@ class SA1BDataset(torch.utils.data.Dataset):
 
             return inputs, embedding
 
-
         elif self.label == 'all_test':
             points, boxes = [], []
             for mask in masks:
@@ -160,28 +156,6 @@ class SA1BDataset(torch.utils.data.Dataset):
             inputs = self.processor(image, input_points=[points], input_boxes=[[boxes]], return_tensors="pt")
             return inputs, image, masks, boxes,  points
 
-
-        #Crop image and mask
-        if self.do_crop:
-            image = SA1BDataset.cropper(image,bin_ground_truth_mask)
-            bin_ground_truth_mask = SA1BDataset.cropper(bin_ground_truth_mask,bin_ground_truth_mask)
-
-        bbox_prompt = SA1BDataset.get_bounding_box(bin_ground_truth_mask)
-        point_prompt = SA1BDataset.get_random_prompt(bin_ground_truth_mask,bbox_prompt)
-        bin_ground_truth_mask = torch.tensor(bin_ground_truth_mask)
-        
-        # prepare image and prompt for the model
-        inputs = self.processor(image, input_points=[[point_prompt]], input_boxes=[[bbox_prompt]], return_tensors="pt")
-
-        # remove batch dimension which the processor adds by default
-        inputs = {k:v.squeeze(0) for k,v in inputs.items()}
-
-        if self.encoder:
-            with torch.no_grad():
-                encoding = self.encoder(inputs["pixel_values"])
-                return inputs, encoding
-        
-        return inputs, bin_ground_truth_mask #, image, torch.tensor(bbox_prompt),  torch.tensor([point_prompt])
     
 class MitoDataset(torch.utils.data.Dataset):
     """
@@ -248,94 +222,6 @@ class MitoDataset(torch.utils.data.Dataset):
         inputs = {k:v.squeeze(0) for k,v in inputs.items()}
 
         return inputs, ground_truth_mask
-    
-class SegmentationDataset(object):
-    """Segmentation Base Dataset"""
-
-    def __init__(self, root, split, mode, transform, base_size=520, crop_size=480):
-        super(SegmentationDataset, self).__init__()
-        self.root = root
-        self.transform = transform
-        self.split = split
-        self.mode = mode if mode is not None else split
-        self.base_size = base_size
-        self.crop_size = crop_size
-
-    def _val_sync_transform(self, img, mask):
-        outsize = self.crop_size
-        short_size = outsize
-        w, h = img.size
-        if w > h:
-            oh = short_size
-            ow = int(1.0 * w * oh / h)
-        else:
-            ow = short_size
-            oh = int(1.0 * h * ow / w)
-        img = img.resize((ow, oh), Image.BILINEAR)
-        mask = mask.resize((ow, oh), Image.NEAREST)
-        # center crop
-        w, h = img.size
-        x1 = int(round((w - outsize) / 2.))
-        y1 = int(round((h - outsize) / 2.))
-        img = img.crop((x1, y1, x1 + outsize, y1 + outsize))
-        mask = mask.crop((x1, y1, x1 + outsize, y1 + outsize))
-        # final transform
-        img, mask = self._img_transform(img), self._mask_transform(mask)
-        return img, mask
-
-    def _sync_transform(self, img, mask):
-        # random mirror
-        if random.random() < 0.5:
-            img = img.transpose(Image.FLIP_LEFT_RIGHT)
-            mask = mask.transpose(Image.FLIP_LEFT_RIGHT)
-        crop_size = self.crop_size
-        # random scale (short edge)
-        short_size = random.randint(int(self.base_size * 0.5), int(self.base_size * 2.0))
-        w, h = img.size
-        if h > w:
-            ow = short_size
-            oh = int(1.0 * h * ow / w)
-        else:
-            oh = short_size
-            ow = int(1.0 * w * oh / h)
-        img = img.resize((ow, oh), Image.BILINEAR)
-        mask = mask.resize((ow, oh), Image.NEAREST)
-        # pad crop
-        if short_size < crop_size:
-            padh = crop_size - oh if oh < crop_size else 0
-            padw = crop_size - ow if ow < crop_size else 0
-            img = ImageOps.expand(img, border=(0, 0, padw, padh), fill=0)
-            mask = ImageOps.expand(mask, border=(0, 0, padw, padh), fill=0)
-        # random crop crop_size
-        w, h = img.size
-        x1 = random.randint(0, w - crop_size)
-        y1 = random.randint(0, h - crop_size)
-        img = img.crop((x1, y1, x1 + crop_size, y1 + crop_size))
-        mask = mask.crop((x1, y1, x1 + crop_size, y1 + crop_size))
-        # gaussian blur as in PSP
-        if random.random() < 0.5:
-            img = img.filter(ImageFilter.GaussianBlur(radius=random.random()))
-        # final transform
-        img, mask = self._img_transform(img), self._mask_transform(mask)
-        return img, mask
-
-    def _img_transform(self, img):
-        return np.array(img)
-
-    def _mask_transform(self, mask):
-        return np.array(mask).astype('int32')
-
-    @property
-    def num_class(self):
-        """Number of categories."""
-        return self.NUM_CLASS
-
-    @property
-    def pred_offset(self):
-        return 0
-
-
-# ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 class COCOSegmentation(torch.utils.data.Dataset):
@@ -348,6 +234,7 @@ class COCOSegmentation(torch.utils.data.Dataset):
                  base_dir='datasets/coco',
                  split='train',
                  year='2017',
+                 labels=4,
                  processor=None):
         super().__init__()
         ann_file = os.path.join(base_dir, 'annotations/instances_{}{}.json'.format(split, year))
@@ -355,7 +242,7 @@ class COCOSegmentation(torch.utils.data.Dataset):
         self.img_dir = os.path.join(base_dir, '{}{}'.format(split, year))
         self.split = split
         self.coco = COCO(ann_file)
-        self.coco_mask = mask
+        self.coco_mask = mask_utils
         if os.path.exists(ids_file):
             self.ids = torch.load(ids_file)
         else:
@@ -363,6 +250,7 @@ class COCOSegmentation(torch.utils.data.Dataset):
             self.ids = self._preprocess(ids, ids_file)
         self.args = args
         self.processor = processor
+        self.labels = labels
         self.mask_idx = 0 if split == 'val' else 1
     
     @staticmethod
@@ -389,44 +277,85 @@ class COCOSegmentation(torch.utils.data.Dataset):
             x = np.random.randint(x_min, x_max)
             y = np.random.randint(y_min, y_max)
             # Check if the point lies inside the mask
-            if ground_truth_map[y, x] == 1:
+            if ground_truth_map[y, x] > 0:
                 return x, y
 
+
     def __getitem__(self, index):
-        _img, _target = self._make_img_gt_point_pair(index,self.mask_idx)
-        sample = {'image': _img, 'label': _target}
-
-        if self.split == "train":
-            sample =  self.transform_tr(sample)
-        elif self.split == 'val':
-            sample = self.transform_val(sample)
+        #Grab image and associated masks
+        _img, _target = self._make_img_gts_pair(index)
+        #Resize image, masks to size 256x256
+        _img, _target = resize_image_and_mask(_img,_target)
         
-        if self.processor:
-            image, mask = sample['image'], sample['label']
+        image, masks = np.array(_img), [np.array(t) for t in _target]
+        image = np.moveaxis(image, -1, 0)
 
-            if not torch.any(mask):
-                return None
+        #binarize mask
+        masks = [(mask > 0).astype(float) for mask in masks]
 
-            img = (image - image.min()) / (image.max() - image.min())
+        masks = [torch.tensor(mask) for mask in masks if np.sum(mask) > 25]
 
-            mask = torch.tensor(mask)
-            #binarize mask
-            mask = (mask > 0).float()
+        masks = self.filter_n_masks(masks)
 
-            bbox_prompt = COCOSegmentation.get_bounding_box(mask)
-            point_prompt = COCOSegmentation.get_random_prompt(mask,bbox_prompt)
+        if self.split == 'val':
+            points, boxes = [], []
+            for mask in masks:
+                bbox_prompt = COCOSegmentation.get_bounding_box(mask)
+                point_prompt = COCOSegmentation.get_random_prompt(mask,bbox_prompt)
+                points.append([point_prompt])
+                boxes.append(bbox_prompt)
+        
+            inputs = self.processor(image, input_points=points, input_boxes=[[boxes]], return_tensors="pt")
+            # remove batch dimension which the processor adds by default
+            inputs = {k:v.squeeze(0) for k,v in inputs.items()}
 
+            #attach stuff to inputs
+            inputs["ground_truth_masks"] = torch.stack([torch.tensor(mask) for mask in masks])
+            inputs["boxes"] = torch.stack([torch.tensor(box) for box in boxes])
+            inputs["points"] = torch.stack([torch.tensor(point) for point in points])
+            inputs["img_id"] = index
+
+            return inputs, image #, masks, boxes,  points
+                
+        elif self.split == 'train':
+            points, boxes = [], []
+            for mask in masks:
+                bbox_prompt = COCOSegmentation.get_bounding_box(mask)
+                point_prompt = COCOSegmentation.get_random_prompt(mask,bbox_prompt)
+                points.append([point_prompt])
+                boxes.append(bbox_prompt)
             
-
-            # prepare image and prompt for the model
-            inputs = self.processor(img, input_points=[[point_prompt]], input_boxes=[[bbox_prompt]], return_tensors="pt")
+            inputs = self.processor(image, input_points=[points], input_boxes=[[boxes]], return_tensors="pt") #Add input_boxes=[[boxes]]
 
             # remove batch dimension which the processor adds by default
             inputs = {k:v.squeeze(0) for k,v in inputs.items()}
 
-            return inputs, mask
-        else:
-            return sample
+            #attach stuff to inputs
+            inputs["ground_truth_masks"] = torch.stack([torch.tensor(mask) for mask in masks])
+            inputs["boxes"] = torch.stack([torch.tensor(box) for box in boxes])
+            inputs["points"] = torch.stack([torch.tensor(point) for point in points])
+            inputs["img_id"] = index
+
+            return inputs, image #, masks, boxes,  points
+
+    def filter_n_masks(self,masks):
+        #Random trimming for train data points
+        if self.split == 'train':
+            if len(masks) < self.labels:
+                while len(masks) < self.labels:
+                    masks.append(random.choice(masks))
+            elif len(masks) > self.labels:
+                while len(masks) > 4:
+                    masks.pop(random.randint(0, len(masks) - 1))
+        #Fixed trimming for val data points
+        if self.split == 'val':
+            if len(masks) < self.labels:
+                while len(masks) < self.labels:
+                    masks.append(masks[0])
+            elif len(masks) > self.labels:
+                masks = masks[:4]
+        return masks
+
 
     def _make_img_gt_point_pair(self, index, mask_idx=0):
         coco = self.coco
@@ -436,7 +365,7 @@ class COCOSegmentation(torch.utils.data.Dataset):
         _img = Image.open(os.path.join(self.img_dir, path)).convert('RGB')
         annids = coco.getAnnIds(imgIds=img_id)
         if mask_idx == 0:
-            annid = annids[0] 
+            annid = annids[0]
         else:
             idx = random.randint(0, len(annids) - 1)
             annid = annids[idx] 
@@ -445,6 +374,21 @@ class COCOSegmentation(torch.utils.data.Dataset):
             cocotarget, img_metadata['height'], img_metadata['width']))
 
         return _img, _target
+
+    def _make_img_gts_pair(self,index):
+        coco = self.coco
+        img_id = self.ids[index]
+        img_metadata = coco.loadImgs(img_id)[0]
+        path = img_metadata['file_name']
+        _img = Image.open(os.path.join(self.img_dir, path)).convert('RGB')
+        annids = coco.getAnnIds(imgIds=img_id)
+        _targets = []
+        for annid in annids:
+            cocotarget = coco.loadAnns(annid)
+            _targets.append(Image.fromarray(self._gen_seg_mask(
+            cocotarget, img_metadata['height'], img_metadata['width'])))
+        
+        return _img, _targets
 
     def _preprocess(self, ids, ids_file):
         print("Preprocessing mask, this will take a while. " + \
@@ -483,200 +427,16 @@ class COCOSegmentation(torch.utils.data.Dataset):
                 mask[:, :] += (mask == 0) * (((np.sum(m, axis=2)) > 0) * c).astype(np.uint8)
         return mask
 
-    def transform_tr(self, sample):
-        composed_transforms = transforms.Compose([
-            tr.RandomHorizontalFlip(),
-            tr.RandomScaleCrop(base_size=self.args.base_size, crop_size=self.args.crop_size),
-            tr.RandomGaussianBlur(),
-            tr.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-            tr.ToTensor()])
-        
-        return composed_transforms(sample)
-
-    def transform_val(self, sample):
-
-        composed_transforms = transforms.Compose([
-            tr.FixScaleCrop(crop_size=self.args.crop_size),
-            tr.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-            tr.ToTensor()])
-
-        return composed_transforms(sample)
-
-
     def __len__(self):
         return len(self.ids)
-
-
-
-# """MSCOCO Semantic Segmentation pretraining for VOC."""
-
-# class COCOSegmentation(SegmentationDataset):
-#     """COCO Semantic Segmentation Dataset for VOC Pre-training.
-
-#     Parameters
-#     ----------
-#     root : string
-#         Path to ADE20K folder. Default is './datasets/coco'
-#     split: string
-#         'train', 'val' or 'test'
-#     transform : callable, optional
-#         A function that transforms the image
-#     Examples
-#     --------
-#     >>> from torchvision import transforms
-#     >>> import torch.utils.data as data
-#     >>> # Transforms for Normalization
-#     >>> input_transform = transforms.Compose([
-#     >>>     transforms.ToTensor(),
-#     >>>     transforms.Normalize((.485, .456, .406), (.229, .224, .225)),
-#     >>> ])
-#     >>> # Create Dataset
-#     >>> trainset = COCOSegmentation(split='train', transform=input_transform)
-#     >>> # Create Training Loader
-#     >>> train_data = data.DataLoader(
-#     >>>     trainset, 4, shuffle=True,
-#     >>>     num_workers=4)
-#     """
-#     CAT_LIST = [0, 5, 2, 16, 9, 44, 6, 3, 17, 62, 21, 67, 18, 19, 4,
-#                 1, 64, 20, 63, 7, 72]
-#     NUM_CLASS = 21
-
-#     def __init__(self, root='./datasets/coco', split='train', mode=None, transform=None, processor=None, **kwargs):
-#         super(COCOSegmentation, self).__init__(root, split, mode, transform, **kwargs)
-#         # lazy import pycocotools
-
-#         if split == 'train':
-#             print('train set')
-#             ann_file = os.path.join(root, 'annotations/instances_train2017.json')
-#             ids_file = os.path.join(root, 'annotations/train_ids.mx')
-#             self.root = os.path.join(root, 'train2017')
-#         else:
-#             print('val set')
-#             ann_file = os.path.join(root, 'annotations/instances_val2017.json')
-#             ids_file = os.path.join(root, 'annotations/val_ids.mx')
-#             self.root = os.path.join(root, 'val2017')
-#         self.coco = COCO(ann_file)
-#         self.coco_mask = mask
-#         if os.path.exists(ids_file):
-#             with open(ids_file, 'rb') as f:
-#                 self.ids = pickle.load(f)
-#         else:
-#             ids = list(self.coco.imgs.keys())
-#             self.ids = self._preprocess(ids, ids_file)
-#         self.transform = transform
-#         self.processor = processor
     
-#     def __len__(self):
-#         return len(self.ids)
-
-#     def __getitem__(self, index):
-#         coco = self.coco
-#         img_id = self.ids[index]
-#         img_metadata = coco.loadImgs(img_id)[0]
-#         path = img_metadata['file_name']
-#         img = Image.open(os.path.join(self.root, path)).convert('RGB')
-#         cocotarget = coco.loadAnns(coco.getAnnIds(imgIds=img_id))
-#         mask = Image.fromarray(self._gen_seg_mask(
-#             cocotarget, img_metadata['height'], img_metadata['width']))
-#         # synchrosized transform
-#         if self.mode == 'train':
-#             img, mask = self._sync_transform(img, mask)
-#         elif self.mode == 'val':
-#             img, mask = self._val_sync_transform(img, mask)
-#         else:
-#             assert self.mode == 'testval'
-#             img, mask = self._img_transform(img), self._mask_transform(mask)
-#         # general resize, normalize and toTensor
-#         if self.transform is not None:
-#             img = self.transform(img)
-        
-#         bbox_prompt = COCOSegmentation.get_bounding_box(mask)
-#         point_prompt = COCOSegmentation.get_random_prompt(mask,bbox_prompt)
-
-#         mask = torch.tensor(mask)
-
-#         # prepare image and prompt for the model
-#         inputs = self.processor(img, input_points=[[point_prompt]], input_boxes=[[bbox_prompt]], return_tensors="pt")
-
-#         # remove batch dimension which the processor adds by default
-#         inputs = {k:v.squeeze(0) for k,v in inputs.items()}
-
-#         return inputs, mask        
-        
-#         #return img, mask #, os.path.basename(self.ids[index])
-
-#     def _mask_transform(self, mask):
-#         return torch.LongTensor(np.array(mask).astype('int32'))
-
-#     def _gen_seg_mask(self, target, h, w):
-#         mask = np.zeros((h, w), dtype=np.uint8)
-#         coco_mask = self.coco_mask
-#         for instance in target:
-#             rle = coco_mask.frPyObjects(instance['segmentation'], h, w)
-#             m = coco_mask.decode(rle)
-#             cat = instance['category_id']
-#             if cat in self.CAT_LIST:
-#                 c = self.CAT_LIST.index(cat)
-#             else:
-#                 continue
-#             if len(m.shape) < 3:
-#                 mask[:, :] += (mask == 0) * (m * c)
-#             else:
-#                 mask[:, :] += (mask == 0) * (((np.sum(m, axis=2)) > 0) * c).astype(np.uint8)
-#         return mask
-
-#     def _preprocess(self, ids, ids_file):
-#         print("Preprocessing mask, this will take a while." + \
-#               "But don't worry, it only run once for each split.")
-#         tbar = trange(len(ids))
-#         new_ids = []
-#         for i in tbar:
-#             img_id = ids[i]
-#             cocotarget = self.coco.loadAnns(self.coco.getAnnIds(imgIds=img_id))
-#             img_metadata = self.coco.loadImgs(img_id)[0]
-#             mask = self._gen_seg_mask(cocotarget, img_metadata['height'], img_metadata['width'])
-#             # more than 1k pixels
-#             if (mask > 0).sum() > 1000:
-#                 new_ids.append(img_id)
-#             tbar.set_description('Doing: {}/{}, got {} qualified images'. \
-#                                  format(i, len(ids), len(new_ids)))
-#         print('Found number of qualified images: ', len(new_ids))
-#         with open(ids_file, 'wb') as f:
-#             pickle.dump(new_ids, f)
-#         return new_ids
+def resize_image_and_mask(image, mask, target_size=(256, 256)):
+    #Resize PIL image, mask pair
+    # Resize both image and mask to the target size
+    resized_image = image.resize(target_size, Image.BILINEAR)
+    if isinstance(mask, Image.Image):
+        resized_mask = mask.resize(target_size, Image.NEAREST)  # Use NEAREST for mask to preserve label values
+    elif isinstance(mask,list):
+        resized_mask = [m.resize(target_size, Image.NEAREST) for m in mask]
     
-
-#     @staticmethod
-#     def get_bounding_box(ground_truth_map):
-#         # get bounding box from mask
-#         y_indices, x_indices = np.where(ground_truth_map > 0)
-#         x_min, x_max = np.min(x_indices), np.max(x_indices)
-#         y_min, y_max = np.min(y_indices), np.max(y_indices)
-#         # add perturbation to bounding box coordinates
-#         H, W = ground_truth_map.shape
-#         x_min = max(0, x_min - np.random.randint(0, 20))
-#         x_max = min(W, x_max + np.random.randint(0, 20))
-#         y_min = max(0, y_min - np.random.randint(0, 20))
-#         y_max = min(H, y_max + np.random.randint(0, 20))
-#         bbox = [x_min, y_min, x_max, y_max]
-
-#         return bbox
-    
-#     @staticmethod
-#     def get_random_prompt(ground_truth_map,bbox):
-#         x_min, y_min, x_max, y_max = bbox
-#         while True:
-#             # Generate random point within the bounding box
-#             x = np.random.randint(x_min, x_max)
-#             y = np.random.randint(y_min, y_max)
-#             # Check if the point lies inside the mask
-#             if ground_truth_map[y, x] == 1:
-#                 return x, y
-
-#     @property
-#     def classes(self):
-#         """Category names."""
-#         return ('background', 'airplane', 'bicycle', 'bird', 'boat', 'bottle',
-#                 'bus', 'car', 'cat', 'chair', 'cow', 'diningtable', 'dog', 'horse',
-#                 'motorcycle', 'person', 'potted-plant', 'sheep', 'sofa', 'train',
-#                 'tv')
+    return resized_image, resized_mask

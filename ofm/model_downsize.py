@@ -3,7 +3,7 @@ import copy
 from torch import nn
 import torch
 import time
-from .utils import calculate_params
+from .utils import calculate_params,structured_pruning
 from peft import (
     PeftModel,
     PeftConfig,
@@ -91,14 +91,7 @@ def check_weight_copy_correctness(subnet, org_model):
     return True
 
 
-def arc_config_sampler(
-    atten_out_space: List[int],
-    inter_hidden_space: List[int],
-    residual_hidden_space: List[int],
-    n_layer=12,
-    smallest=False,
-    largest=False,
-) -> dict:
+def arc_config_sampler(elastic_config:dict, n_layer=12,smallest=False,largest=False)->dict:
     """Generate subnet architecture configuration based on the provided configuration.
 
     Args:
@@ -111,36 +104,51 @@ def arc_config_sampler(
     Returns:
         dic: Subnet architecture configure.
     """
+    
     arc_config = {}
     np.random.seed(int(time.time()))  # Set the seed to the current time
 
-    residual_hidden = np.random.choice(residual_hidden_space).item()
     assert smallest == False or largest == False  # Only one can be true
-
-    if smallest:
-        residual_hidden = min(residual_hidden_space)
-    elif largest:
-        residual_hidden = max(residual_hidden_space)
-
+    assert len(elastic_config) - 1 == n_layer
+    
     for layer in range(n_layer):
+        layer = str(layer)
         if smallest:
-            inter_hidden = min(inter_hidden_space)
-            atten_out = min(atten_out_space)
+            inter_hidden = min(elastic_config[layer]["inter_hidden_space"])
+            atten_out = min(elastic_config[layer]["atten_out_space"])
         elif largest:
-            inter_hidden = max(inter_hidden_space)
-            atten_out = max(atten_out_space)
+            inter_hidden = max(elastic_config[layer]["inter_hidden_space"])
+            atten_out = max(elastic_config[layer]["atten_out_space"])
         else:
-            inter_hidden = np.random.choice(inter_hidden_space).item()
-            atten_out = np.random.choice(atten_out_space).item()
+            inter_hidden = np.random.choice(elastic_config[layer]["inter_hidden_space"]).item()
+            atten_out = np.random.choice(elastic_config[layer]["atten_out_space"]).item()
 
-        arc_config[f"layer_{layer + 1}"] = {
+        arc_config[f"{int(layer)}"] = {
             "atten_out": atten_out,
             "inter_hidden": inter_hidden,
-            "residual_hidden": residual_hidden,
+            "residual_hidden": elastic_config[layer]["residual_hidden"],
         }
+    
+    def sample_layer_indices(target_layer_idx, prob):
+        import random
+        sampled_layer_idx = []
+        for idx, p in zip(target_layer_idx, prob):
+            if random.random() < p:
+                sampled_layer_idx.append(idx)
+        return sampled_layer_idx
 
+    layer_elastic = elastic_config['layer_elastic']
+    if smallest:
+        remove_layer_idx = layer_elastic['elastic_layer_idx']
+    elif largest:
+        remove_layer_idx = []
+    else:
+        remove_layer_idx = sample_layer_indices(layer_elastic['elastic_layer_idx'], layer_elastic['remove_layer_prob'])
+    
+    arc_config['remove_layer_idx'] = remove_layer_idx
+    
+    
     return arc_config
-
 
 def clip_module_handler(model, arc_config):
     from transformers.models.clip.modeling_clip import (
@@ -622,9 +630,16 @@ def sam_module_handler(model, arc_config):
 
             self.lin1 = nn.Linear(config.hidden_size, config.mlp_dim)
             self.lin2 = nn.Linear(config.mlp_dim, config.hidden_size)
-
-    for i, (layer, key) in enumerate(zip(sam_vit_layers, arc_config)):
-        arc = arc_config[key]
+    
+    ## Remove layer index
+    remove_layer_idx = arc_config['remove_layer_idx']
+    # print(f'arc_config : {arc_config}')
+    # for i, (layer, key) in enumerate(zip(sam_vit_layers, arc_config)):
+    for i, layer in enumerate(sam_vit_layers):
+        if i in remove_layer_idx:
+            # for layer been pruned, simply skip it here
+            continue
+        arc = arc_config[str(i)]
         new_config = SamVisionConfig.from_dict(vision_encoder.config.to_dict())
 
         # new_config.hidden_size = arc  # Set to the new output dimension
@@ -646,7 +661,13 @@ def sam_module_handler(model, arc_config):
         layer.mlp = new_mlp
 
     sub_model.vision_encoder = vision_encoder
+    
+    
+    
+
     copy_weights_to_subnet(sub_model, model)
+    sub_model, _, _ = structured_pruning(sub_model,remove_layer_idx,model.vision_encoder.config.global_attn_indexes)
+
     total_params = calculate_params(sub_model)
 
     return sub_model, total_params

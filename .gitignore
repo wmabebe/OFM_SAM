@@ -173,3 +173,7 @@ log/
 examples/ckpt/
 examples/logs/
 scripts/eval/*
+
+#Images
+*.jpg
+*.png

@@ -67,30 +67,62 @@ if __name__ == '__main__':
         subset_dataset = Subset(test_dataset, indices=range(10000,10100,1))
         test_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True, collate_fn = sa1b_collate_fn) #collate_fn = sa1b_collate_fn
  
+        reordering_dataset = SA1BDataset(f'{DATA_ROOT}SA1B', processor=processor, do_crop=args.crop,label='from_embedding')
+        subset_dataset = Subset(reordering_dataset, indices=range(0,8 * args.batch_size,1))
+        reorder_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=True, drop_last=False, collate_fn=sa1b_collate_fn)
+
 
     print(f'testloader : {len(test_dataloader)}')
 
-    layers_to_mask = [[0],[6],[6,1],[1,6,9]]
+    layers_to_mask = [[1,5,7]]
 
-    for layers in layers_to_mask:
 
-        original_model = SamModel.from_pretrained("facebook/sam-vit-base")
-        processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
+    for reordering in ['','magnitude','wanda']:
+        for layers in layers_to_mask:
 
-        elastic_config = {
-            "atten_out_space": [2304], #Don't go over 768
-            "inter_hidden_space": [768,1536,3072], #Reduce for minimizing model size
-            "residual_hidden_space": [128,512,1020],
-        }
+            original_model = SamModel.from_pretrained("facebook/sam-vit-base")
+            processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
 
-        ofm = OFM(original_model, elastic_config=elastic_config)
+            for idx in layers:
+                del original_model.vision_encoder.layers[idx]
+            
+            original_model.vision_encoder.config.num_hidden_layers = 9
 
-        #ofm.mask_layers(layers)
-        ofm.remove_layers(layers)
+            regular_config = {
+                "atten_out_space": [768], #Don't go over 768
+                "inter_hidden_space": [3072], #Reduce for minimizing model size
+                "residual_hidden": [1020],
+            }
 
-        average_mIoU, mIoU, map = eval(ofm.model,test_dataloader,device='cuda',disable_verbose=True,processor=processor, prompt='p')
+            elastic_config = {
+                "atten_out_space": [768], #Don't go over 768
+                "inter_hidden_space": [96,192,384],#[192,384,768], #[768,1020,1536], #Reduce for minimizing model size
+                "residual_hidden": [1020],
+            }
 
-        print(f'Masking layer {layers} : miou = {average_mIoU}')
+            config = {0:regular_config, 1:elastic_config, 2:elastic_config,3:elastic_config, 4:elastic_config,
+                    5:elastic_config, 6:elastic_config,7:elastic_config,8:elastic_config} # , 9 :elastic_config,10:elastic_config, 11:elastic_config}
+
+
+            ofm = OFM(original_model, elastic_config=config)
+
+            #ofm.mask_layers(layers)
+            #ofm.remove_layers(layers)
+            if reordering:
+                ofm.mlp_layer_reordering(reorder_dataloader,reordering)
+
+            smallest, smallest_params, smallest_arc = ofm.smallest_model()
+            medium, medium_params, medium_arc = ofm.random_resource_aware_model()
+
+
+            print(f'Removed layers {layers}, reordered with {reordering}')
+            average_mIoU, mIoU, map = eval(ofm.model,test_dataloader,device='cuda',disable_verbose=True,processor=processor, prompt='p')
+            print(f'\tSupernet params : {count_parameters(original_model)} supernet miou = {average_mIoU}')
+            average_mIoU, mIoU, map = eval(smallest,test_dataloader,device='cuda',disable_verbose=True,processor=processor, prompt='p')
+            print(f'\tSmallest params : {count_parameters(smallest)} smallest miou = {average_mIoU}')
+            average_mIoU, mIoU, map = eval(medium,test_dataloader,device='cuda',disable_verbose=True,processor=processor, prompt='p')
+            print(f'\tMedium params : {count_parameters(medium)} smallest miou = {average_mIoU}')
+
 
     exit()
 

@@ -31,12 +31,14 @@ class SA1B_NAS_Trainer:
         mIoU = []
         model.eval()
         model = nn.DataParallel(model).to(self.device)
-        for idx,(inputs, images, labels, boxes, points) in enumerate(tqdm(self.test_dataloader, disable=self.no_verbose)): 
+        for idx,(inputs, images, labels, boxes, points) in enumerate(self.test_dataloader): #enumerate(tqdm(self.test_dataloader, disable=self.no_verbose)): 
 
             torch.cuda.empty_cache()
 
             #Set num_objects to 32 or num of points in the data with fewest points
             num_objects = min(self.prompt_batch_size, min([len(pts) for pts in points]))
+
+            print(f'num_objects : {num_objects}')
 
             # Filter num_objects prompt indices from points and boxes
             input_boxes, input_points = [], []
@@ -144,7 +146,7 @@ class SA1B_NAS_Trainer:
             for k, v in model.state_dict().items():
                 local_grad[f'vision_encoder.{k}'] = local_grad[f'vision_encoder.{k}'] - v.cpu()
 
-        self.supermodel.apply_grad(local_grad)
+        self.supermodel.apply_grad(local_grad,model.config.arch['remove_layer_idx'])
 
         train_metrics = {
             "train_loss": loss.sum().item(),
@@ -230,7 +232,7 @@ class SA1B_NAS_Trainer:
             for k, v in model.state_dict().items():
                 local_grad[k] = local_grad[k] - v.cpu()
 
-        self.supermodel.apply_grad(local_grad)
+        self.supermodel.apply_grad(local_grad,model.config.arch['remove_layer_idx'])
 
         train_metrics = {
             "train_loss": loss.sum().item(),
@@ -306,7 +308,7 @@ class SA1B_NAS_Trainer:
                     submodel, submodel.config.num_parameters, submodel.config.arch = (
                             copy.deepcopy(self.supermodel.model),
                             self.supermodel.total_params,
-                            {},
+                            {'remove_layer_idx':[]},
                         )
                     
                     self.single_step(submodel,inputs,labels,'Largest',do_test,images, boxes, points)

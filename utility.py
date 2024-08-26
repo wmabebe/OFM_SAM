@@ -107,6 +107,8 @@ def show_anns(anns):
 
 
 def show_mask(mask, ax, random_color=False):
+    if isinstance(mask,torch.Tensor):
+        mask = mask.cpu().numpy()
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
     else:
@@ -157,6 +159,7 @@ def show_points(coords, labels, ax, marker_size=375):
 
 
 def show_box(box, ax, label="",linecolor=[]):
+    print(f'box : {box}')
     x0, y0 = box[0], box[1]
     w, h = box[2] - box[0], box[3] - box[1]
     ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='black', facecolor=(0,0,0,0), lw=5))
@@ -175,11 +178,11 @@ def save_preds(map,folder):
     for name, (img,point_prompt,box_prompt,gts,pred,iou) in map.items():
         fig, axes = plt.subplots(1, 2, figsize=(20, 10))
 
-        print(f'img {img.shape}')
-        print(f'point prompt {point_prompt} shape = {point_prompt.shape}')
-        print(f'box prompt {box_prompt} shape = {box_prompt.shape}')
-        print(f'gts {gts.shape}')
-        print(f'pred {pred.shape}')
+        # print(f'img {img.shape}')
+        # print(f'point prompt {point_prompt} shape = {point_prompt.shape}')
+        # print(f'box prompt {box_prompt} shape = {box_prompt.shape}')
+        # print(f'gts {gts.shape}')
+        # print(f'pred {pred.shape}')
 
         # point_prompt = point_prompt.squeeze(0)
         point_prompt = point_prompt.numpy()
@@ -190,7 +193,12 @@ def save_preds(map,folder):
 
 
         #Transpose image for plotting
-        img = img.transpose(1, 2, 0)
+        #img = img.transpose(1, 2, 0)
+        if isinstance(img, torch.Tensor):
+            img = img.permute(1, 2, 0)
+            img = img.cpu().numpy()
+        elif isinstance(img, np.ndarray):
+            img = img.transpose(1, 2, 0)
 
         axes[0].imshow(img)
         show_mask(gts, axes[0]) #plt.gca()
@@ -209,7 +217,38 @@ def save_preds(map,folder):
         plt.tight_layout()
         plt.savefig(plot_path)
 
+def structured_pruning(model,layers_to_prune,global_attn_indexes):
+    """Prune the SAM model's vision encoder layers.
 
+    Args:
+        model (nn.module): SAM model.
+        layers_to_prune (list[int]): Indices of layers to remove.
+        global_attn_indexes (list[int]): Original SAM vision encoder global attention indices.
+
+    Returns:
+        (list[int],list[int]): Prunned layers and shifted global indices.
+    """
+    
+    #Assert layer indices are valid
+    for l in layers_to_prune:
+        assert l in list(range(len(model.vision_encoder.layers)))
+    
+    #Remove overlapping indices from global_attn_indexes
+    global_attn_indexes = [l for l in global_attn_indexes if l not in layers_to_prune]
+    
+    #Shift prunnable layers to left  Eg. layers 1,6,9 --> 1, 5, 7 
+    layers_to_prune = [i-idx for idx,i in enumerate(layers_to_prune)]
+
+    #Remove layers and shift global_attention indices accordingly
+    for l in layers_to_prune:
+        del model.vision_encoder.layers[l]
+        global_attn_indexes = [i-1 if i > l else i for i in global_attn_indexes]
+
+
+    model.vision_encoder.config.global_attn_indexes = global_attn_indexes
+    model.vision_encoder.config.num_hidden_layers = 12 - len(layers_to_prune)
+
+    return layers_to_prune, global_attn_indexes
 
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -472,7 +511,7 @@ def get_optimizer_and_scheduler(params,lr=1e-5,weight_decay=0,scheduler=None):
         weight_decay=weight_decay,
     )
     if not scheduler:
-        lower_bound_lr = lr / 1000
+        lower_bound_lr = lr / 100
         scheduler = LambdaLR(optimizer, lr_lambda=lambda x: max(lower_bound_lr, 0.975**x))
     else:
         scheduler.optimizer = optimizer
@@ -541,7 +580,8 @@ def plot_dist(score_dist,filename='score-dist.png',importance='Magnitude'):
 def none_skipper_collate(batch):
     "Puts each data field into a tensor with outer dimension batch size"
     batch = list(filter(lambda x : x is not None, batch))
-    return default_collate(batch)
+    return list(map(list, zip(*batch)))
+    #return default_collate(batch)
 
 def euclidean_distance(tensor1, tensor2):
     return torch.sqrt(torch.sum((tensor1 - tensor2) ** 2))
