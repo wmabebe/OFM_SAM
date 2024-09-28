@@ -10,25 +10,27 @@ import random
 from PIL import Image
 from pycocotools.coco import COCO
 from tqdm import trange
+import cv2
 
 
 class SA1BDataset(torch.utils.data.Dataset):
-    def __init__(self, dataset_directory, processor, do_crop=False, encoder=None, label='first'):
+    def __init__(self, dataset_directory, processor, encoder=None, max_labels=64, split='train'):
         self.datadir = dataset_directory
         self.processor = processor
         self.imgs, self.labels = SA1BDataset.get_image_json_pairs(self.datadir)
-        self.do_crop = do_crop
         self.encoder = encoder
-        self.label = label
+        self.max_labels = max_labels
+        self.split = split
         
 
     def __len__(self):
         return len(self.imgs)
     
     def loader(self,file_path):
-        image = Image.open(file_path)
-        image = np.array(image)
-        image = np.moveaxis(image, -1, 0)
+        #image = Image.open(file_path)
+        image = cv2.imread(file_path)
+        #image = np.array(image)
+        #image = np.moveaxis(image, -1, 0)
         return image
 
     @staticmethod
@@ -80,7 +82,7 @@ class SA1BDataset(torch.utils.data.Dataset):
             y = np.random.randint(y_min, y_max)
             # Check if the point lies inside the mask
             if ground_truth_map[y, x] == 1:
-                return [x, y]
+                return x, y
     
     @staticmethod
     def get_image_json_pairs(directory):
@@ -99,6 +101,24 @@ class SA1BDataset(torch.utils.data.Dataset):
     def get_embedding(filepath):
         return torch.load(filepath)
     
+    def filter_n_masks(self,masks):
+        #Random trimming for train data points
+        if self.split == 'train':
+            if len(masks) < self.max_labels:
+                while len(masks) < self.max_labels:
+                    masks.append(random.choice(masks))
+            elif len(masks) > self.max_labels:
+                while len(masks) > self.max_labels:
+                    masks.pop(random.randint(0, len(masks) - 1))
+        #Fixed trimming for val data points
+        if self.split == 'val':
+            if len(masks) < self.max_labels:
+                while len(masks) < self.max_labels:
+                    masks.append(masks[0])
+            elif len(masks) > self.max_labels:
+                masks = masks[:self.max_labels]
+        return masks
+    
     def __getitem__(self, index):
         """
         Args:
@@ -111,50 +131,99 @@ class SA1BDataset(torch.utils.data.Dataset):
         image = self.loader(img_path)
         masks = json.load(open(label_path))['annotations'] # load json masks
 
-        #Just pick the first mask
-        if self.label == 'first':
-            mask = masks[0]
-            bin_ground_truth_mask = mask_utils.decode(mask['segmentation'])
-        elif self.label == 'rand':
-            idx = random.randint(0, len(masks) - 1)
-            mask = masks[idx]
-            bin_ground_truth_mask = mask_utils.decode(mask['segmentation'])
-        elif self.label == 'to_embedding':
+        if self.split == 'to_embedding':
             inputs = self.processor(image, return_tensors="pt")
             embed_file = self.imgs[index][:-4] + '.pt'
             embed_path = os.path.join(self.datadir,embed_file)
             return inputs, embed_path
-        elif self.label == 'from_embedding':
+        elif self.split == 'from_embedding':
             inputs = self.processor(image, return_tensors="pt")
             embed_file = self.imgs[index][:-4] + '.pt'
             embed_path = os.path.join(self.datadir,embed_file)
             embedding = SA1BDataset.get_embedding(embed_path)
 
+            # remove batch dimension which the processor adds by default
+            inputs = {k:v.squeeze(0) for k,v in inputs.items()}
+
             return inputs, embedding
 
-        elif self.label == 'all_test':
-            points, boxes = [], []
+        elif self.split == 'val':
+            bin_masks, points, boxes = [], [], []
             for mask in masks:
-                bin_ground_truth_mask = mask_utils.decode(mask['segmentation'])
-                bbox_prompt = SA1BDataset.get_bounding_box(bin_ground_truth_mask)
-                point_prompt = SA1BDataset.get_random_prompt(bin_ground_truth_mask,bbox_prompt)
-                points.append(point_prompt)
+                bin_masks.append(mask_utils.decode(mask['segmentation']))
+            
+            image, bin_masks = resize_image_and_mask(image, bin_masks)
+
+            bin_masks = [(mask > 0).astype(float) for mask in bin_masks]
+            bin_masks = [torch.tensor(mask) for mask in bin_masks if np.sum(mask) > 100]
+            
+            if 0 == len(bin_masks):
+                return None
+
+            bin_masks = self.filter_n_masks(bin_masks)
+            
+            for bin_mask in bin_masks:
+                bbox_prompt = SA1BDataset.get_bounding_box(bin_mask)
+                point_prompt = SA1BDataset.get_random_prompt(bin_mask,bbox_prompt)
+                points.append([point_prompt])
                 boxes.append(bbox_prompt)
         
             inputs = self.processor(image, input_points=points, input_boxes=[[boxes]], return_tensors="pt")
-            return inputs, image, masks, boxes,  points
+            
+            # remove batch dimension which the processor adds by default
+            inputs = {k:v.squeeze(0) for k,v in inputs.items()}
+
+            #attach stuff to inputs
+            inputs["ground_truth_masks"] = torch.stack([torch.tensor(bin_mask) for bin_mask in bin_masks])
+            inputs["boxes"] = torch.stack([torch.tensor(box) for box in boxes])
+            inputs["points"] = torch.stack([torch.tensor(point) for point in points])
+            inputs["img_id"] = index
+
+            image = np.array(image)
+            image = np.moveaxis(image, -1, 0)
+
+            inputs["image"] = image
+            
+            return inputs  #, image, masks, boxes,  points
                 
-        elif self.label == 'all_train':
-            points, boxes = [], []
+        elif self.split == 'train':
+            bin_masks, points, boxes = [], [], []
             for mask in masks:
-                bin_ground_truth_mask = mask_utils.decode(mask['segmentation'])
-                bbox_prompt = SA1BDataset.get_bounding_box(bin_ground_truth_mask)
-                point_prompt = SA1BDataset.get_random_prompt(bin_ground_truth_mask,bbox_prompt)
+                bin_masks.append(mask_utils.decode(mask['segmentation']))
+            
+            image, bin_masks = resize_image_and_mask(image, bin_masks)
+
+            bin_masks = [(mask > 0).astype(float) for mask in bin_masks]
+            bin_masks = [torch.tensor(mask) for mask in bin_masks if np.sum(mask) > 100]
+
+            if 0 == len(bin_masks):
+                return None
+
+            bin_masks = self.filter_n_masks(bin_masks)
+
+            for bin_mask in bin_masks:
+                bbox_prompt = SA1BDataset.get_bounding_box(bin_mask)
+                point_prompt = SA1BDataset.get_random_prompt(bin_mask,bbox_prompt)
                 points.append([point_prompt])
                 boxes.append(bbox_prompt)
                 
             inputs = self.processor(image, input_points=[points], input_boxes=[[boxes]], return_tensors="pt")
-            return inputs, image, masks, boxes,  points
+
+            # remove batch dimension which the processor adds by default
+            inputs = {k:v.squeeze(0) for k,v in inputs.items()}
+
+             #attach stuff to inputs
+            inputs["ground_truth_masks"] = torch.stack([torch.tensor(bin_mask) for bin_mask in bin_masks])
+            inputs["boxes"] = torch.stack([torch.tensor(box) for box in boxes])
+            inputs["points"] = torch.stack([torch.tensor(point) for point in points])
+            inputs["img_id"] = index
+
+            image = np.array(image)
+            image = np.moveaxis(image, -1, 0)
+
+            inputs["image"] = image
+            
+            return inputs  #, image, masks, boxes,  points
 
     
 class MitoDataset(torch.utils.data.Dataset):
@@ -234,7 +303,7 @@ class COCOSegmentation(torch.utils.data.Dataset):
                  base_dir='datasets/coco',
                  split='train',
                  year='2017',
-                 labels=4,
+                 max_labels=8,
                  processor=None):
         super().__init__()
         ann_file = os.path.join(base_dir, 'annotations/instances_{}{}.json'.format(split, year))
@@ -250,7 +319,7 @@ class COCOSegmentation(torch.utils.data.Dataset):
             self.ids = self._preprocess(ids, ids_file)
         self.args = args
         self.processor = processor
-        self.labels = labels
+        self.max_labels = max_labels
         self.mask_idx = 0 if split == 'val' else 1
     
     @staticmethod
@@ -284,6 +353,7 @@ class COCOSegmentation(torch.utils.data.Dataset):
     def __getitem__(self, index):
         #Grab image and associated masks
         _img, _target = self._make_img_gts_pair(index)
+
         #Resize image, masks to size 256x256
         _img, _target = resize_image_and_mask(_img,_target)
         
@@ -294,6 +364,9 @@ class COCOSegmentation(torch.utils.data.Dataset):
         masks = [(mask > 0).astype(float) for mask in masks]
 
         masks = [torch.tensor(mask) for mask in masks if np.sum(mask) > 25]
+
+        if 0 == len(masks):
+            return None
 
         masks = self.filter_n_masks(masks)
 
@@ -314,8 +387,9 @@ class COCOSegmentation(torch.utils.data.Dataset):
             inputs["boxes"] = torch.stack([torch.tensor(box) for box in boxes])
             inputs["points"] = torch.stack([torch.tensor(point) for point in points])
             inputs["img_id"] = index
-
-            return inputs, image #, masks, boxes,  points
+            inputs["image"] = image
+            
+            return inputs  #, image, masks, boxes,  points
                 
         elif self.split == 'train':
             points, boxes = [], []
@@ -335,25 +409,26 @@ class COCOSegmentation(torch.utils.data.Dataset):
             inputs["boxes"] = torch.stack([torch.tensor(box) for box in boxes])
             inputs["points"] = torch.stack([torch.tensor(point) for point in points])
             inputs["img_id"] = index
-
-            return inputs, image #, masks, boxes,  points
+            inputs["image"] = image
+            
+            return inputs  #, image, masks, boxes,  points
 
     def filter_n_masks(self,masks):
         #Random trimming for train data points
         if self.split == 'train':
-            if len(masks) < self.labels:
-                while len(masks) < self.labels:
+            if len(masks) < self.max_labels:
+                while len(masks) < self.max_labels:
                     masks.append(random.choice(masks))
-            elif len(masks) > self.labels:
-                while len(masks) > 4:
+            elif len(masks) > self.max_labels:
+                while len(masks) > self.max_labels:
                     masks.pop(random.randint(0, len(masks) - 1))
         #Fixed trimming for val data points
         if self.split == 'val':
-            if len(masks) < self.labels:
-                while len(masks) < self.labels:
+            if len(masks) < self.max_labels:
+                while len(masks) < self.max_labels:
                     masks.append(masks[0])
-            elif len(masks) > self.labels:
-                masks = masks[:4]
+            elif len(masks) > self.max_labels:
+                masks = masks[:self.max_labels]
         return masks
 
 
@@ -429,14 +504,36 @@ class COCOSegmentation(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.ids)
-    
+
 def resize_image_and_mask(image, mask, target_size=(256, 256)):
-    #Resize PIL image, mask pair
-    # Resize both image and mask to the target size
-    resized_image = image.resize(target_size, Image.BILINEAR)
+    """Resize (image, masks) pair
+
+    Args:
+        image (PIL.Image, np.ndarray): PIL image or 
+        mask ([PIL.Image], [np.ndarray]): _description_
+        target_size (tuple, optional): _description_. Defaults to (256, 256).
+
+    Returns:
+        (PIL.Image,[PIL.Image]),(): resized (image, masks) pair
+    """
+    if isinstance(image, Image.Image):
+        resized_image = image.resize(target_size, Image.BILINEAR)
+    elif isinstance(image, np.ndarray):
+        resized_image = cv2.resize(image, dsize=target_size, interpolation=cv2.INTER_LINEAR)
+    
+    # Resizing for PIL mask
     if isinstance(mask, Image.Image):
         resized_mask = mask.resize(target_size, Image.NEAREST)  # Use NEAREST for mask to preserve label values
+    # Resizing for numpy mask
+    elif isinstance(mask, np.ndarray):
+        resized_mask = cv2.resize(mask, dsize=target_size, interpolation=cv2.INTER_NEAREST)
+    
     elif isinstance(mask,list):
-        resized_mask = [m.resize(target_size, Image.NEAREST) for m in mask]
+        # Resize the PIL masks
+        if isinstance(mask[0],Image.Image):
+            resized_mask = [m.resize(target_size, Image.NEAREST) for m in mask]
+        # Resizing for numpy masks
+        elif isinstance(mask[0],np.ndarray):
+            resized_mask = [cv2.resize(m, dsize=target_size, interpolation=cv2.INTER_NEAREST) for m in mask]
     
     return resized_image, resized_mask

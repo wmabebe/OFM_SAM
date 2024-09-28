@@ -26,6 +26,9 @@ if __name__ == '__main__':
     log_dir = './logs/{}_dataset[{}]_trainable[{}]_epochs[{}]_lr[{}]_local_bs[{}]/'. \
         format(NOW,args.dataset, args.trainable, args.epochs, args.lr, args.batch_size)
     
+    #Use prompt_size 64 for SA1B and prompt_size 8 for COCO
+    args.prompt_batch_size = 8 if args.dataset == 'coco' else 64
+    
 
     init_logs(log_file_name, args, log_dir)
     args.logger = get_logger()
@@ -40,7 +43,9 @@ if __name__ == '__main__':
 
 
     # layers_to_prune = [1,6,9]
-    # global_attn_indexes = [ 2, 5, 8, 11 ] #Taken from ViT config page on huggingface
+    # ViT-B global_attn_indexes = [ 2, 5, 8, 11 ] #Taken from ViT config page on huggingface
+    #ViT-L encoder_global_attn_indexes=[5, 11, 17, 23],
+    #ViT-H encoder_global_attn_indexes=[7, 15, 23, 31],
 
     # assert ([1,5,7],[1,4,6,8]) == structured_pruning(original_model,layers_to_prune,global_attn_indexes), f'Prunning failed!'
 
@@ -52,16 +57,18 @@ if __name__ == '__main__':
     }
     elastic_config = {
         "atten_out_space": [768], #Don't go over 768
-        "inter_hidden_space": [768,1020,1536], #Reduce for minimizing model size [1536,2304]
+        "inter_hidden_space": [768,1020,1536,2304], #Reduce for minimizing model size [1536,2304]
         "residual_hidden": [1020],
     }
 
-    config = {'0':regular_config, '1':elastic_config, '2':elastic_config,'3':regular_config, '4':regular_config,
-                '5':elastic_config,'6':elastic_config,'7':regular_config,'8':regular_config,'9':elastic_config,
-                '10':regular_config,'11':regular_config,
+    config = {'0':regular_config, '1':elastic_config, '2':elastic_config,'3':elastic_config, '4':elastic_config,
+                '5':elastic_config,'6':elastic_config,'7':elastic_config,'8':elastic_config,'9':elastic_config,
+                '10':elastic_config,'11':elastic_config,
                 "layer_elastic":{
-                "elastic_layer_idx":[1,6,9],
-                "remove_layer_prob":[0.5,0.5,0.5]
+                #"elastic_layer_idx": [1,6,9],
+                #"remove_layer_prob":[.5,.5,.5]
+                "elastic_layer_idx":  [1,2,5,6,9],
+                "remove_layer_prob":[.5,.5,.5,.5,.5]
                 }}
 
 
@@ -100,61 +107,61 @@ if __name__ == '__main__':
     
     elif args.dataset == 'sa1b':
         if 'e' in args.trainable and 'm' in args.trainable:
-            train_dataset = SA1BDataset(f'{DATA_ROOT}SA1B', processor=processor, do_crop=args.crop,label='all_train')
+            train_dataset = SA1BDataset(f'{DATA_ROOT}SA1B', processor=processor,split='train',max_labels=args.prompt_batch_size)
         elif 'e' in args.trainable:
-            train_dataset = SA1BDataset(f'{DATA_ROOT}SA1B', processor=processor, do_crop=args.crop,label='from_embedding')
-        test_dataset = SA1BDataset(f'{DATA_ROOT}SA1B', processor=processor, do_crop=args.crop,label='all_test')
+            train_dataset = SA1BDataset(f'{DATA_ROOT}SA1B', processor=processor,split='from_embedding')
+        test_dataset = SA1BDataset(f'{DATA_ROOT}SA1B', processor=processor,split='val',max_labels=args.prompt_batch_size)
 
         #Use X batches of data for wanda reordering
-        reordering_dataset = SA1BDataset(f'{DATA_ROOT}SA1B', processor=processor, do_crop=args.crop,label='from_embedding')
-        subset_dataset = Subset(reordering_dataset, indices=range(0,32 * args.batch_size,1))
-        reorder_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=True, drop_last=False, collate_fn=sa1b_collate_fn)
+        reordering_dataset = SA1BDataset(f'{DATA_ROOT}SA1B', processor=processor, split='train')
+        subset_dataset = Subset(reordering_dataset, indices=range(0,2 * args.batch_size,1))
+        reorder_dataloader = DataLoader(subset_dataset, batch_size=8, shuffle=True, drop_last=False, collate_fn=none_skipper_collate)
         args.reorder_dataloader = reorder_dataloader
 
         # Apply subset for shorter training
         if args.train_subset:
             subset_dataset = Subset(train_dataset, indices=range(0,args.train_subset,1))
-            train_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=False, collate_fn = sa1b_collate_fn) #collate_fn = sa1b_collate_fn
+            train_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=none_skipper_collate) #collate_fn = sa1b_collate_fn
         
         else:
             subset_dataset = Subset(train_dataset, indices=range(0,10000,1))
-            train_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=True, drop_last=False, collate_fn = sa1b_collate_fn)
+            train_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=True, drop_last=False, collate_fn=none_skipper_collate)
         
         if args.test_subset:
             subset_dataset = Subset(test_dataset, indices=range(args.train_subset,args.train_subset + args.test_subset,1))
-            test_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True, collate_fn = sa1b_collate_fn) #collate_fn = sa1b_collate_fn
+            test_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True, collate_fn=none_skipper_collate) #collate_fn = sa1b_collate_fn
         else:
             subset_dataset = Subset(test_dataset, indices=range(10000,len(test_dataset),1))
-            test_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True, collate_fn = sa1b_collate_fn)
+            test_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True, collate_fn=none_skipper_collate)
 
     elif args.dataset == 'coco':
         #dataset = COCOSegmentation('datasets/coco','val', processor=processor)
         args.base_size = 513
         args.crop_size = 513
-        train_dataset = COCOSegmentation(args,f'{DATA_ROOT}coco','train', '2017', processor=processor)
-        test_dataset = COCOSegmentation(args,f'{DATA_ROOT}coco','val', '2017', processor=processor)
+        train_dataset = COCOSegmentation(args,f'{DATA_ROOT}coco','train', '2017', max_labels=args.prompt_batch_size, processor=processor)
+        test_dataset = COCOSegmentation(args,f'{DATA_ROOT}coco','val', '2017', max_labels=args.prompt_batch_size, processor=processor)
         #test_dataset = COCOSegmentation('datasets/coco','val')
 
-        reordering_dataset =  COCOSegmentation(args,f'{DATA_ROOT}coco','val', '2017', processor=processor)
-        subset_dataset = Subset(reordering_dataset, indices=range(0,32 * args.batch_size,1))
-        reorder_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=True, drop_last=False) #none_skipper_collate
+        reordering_dataset =  COCOSegmentation(args,f'{DATA_ROOT}coco','train', '2017', max_labels=args.prompt_batch_size, processor=processor)
+        subset_dataset = Subset(reordering_dataset, indices=range(0,2 * args.batch_size,1))
+        reorder_dataloader = DataLoader(subset_dataset, batch_size=8, shuffle=True, drop_last=False, collate_fn=none_skipper_collate) #none_skipper_collate
         args.reorder_dataloader = reorder_dataloader
 
         # Apply subset for shorter training
         if args.train_subset:
             subset_dataset = Subset(train_dataset, indices=range(0,args.train_subset,1))
-            train_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=True) #collate_fn = custom_collate_fn
+            train_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=none_skipper_collate) #collate_fn = custom_collate_fn
         
         else:
             #subset_dataset = Subset(train_dataset, indices=range(0,3000,1))
-            train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, drop_last=False)
+            train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, drop_last=False, collate_fn=none_skipper_collate)
         
         if args.test_subset:
             subset_dataset = Subset(test_dataset, indices=range(0,args.test_subset,1))
-            test_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True) #collate_fn = custom_collate_fn
+            test_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True, collate_fn=none_skipper_collate) #collate_fn = custom_collate_fn
         else:
             #subset_dataset = Subset(dataset, indices=range(3000,len(dataset),1))
-            test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True)
+            test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True, collate_fn=none_skipper_collate)
 
     #args.logger.info(f'Dataset : {len(dataset)}')
     args.logger.info(f'trainloader : {len(train_dataloader)} x batch_size : {args.batch_size}')
@@ -179,12 +186,13 @@ if __name__ == '__main__':
             plot_dist(score_dist,filename='movement-dist.png',importance='Movement')
         args.logger.info(f'Reordered {args.reorder} using {args.reorder_method if args.reorder_method else "No"} importance')
 
+    trainer = COCO_NAS_Trainer(args)
 
     #Initialize Trainer
-    if args.dataset == 'sa1b':
-        trainer = SA1B_NAS_Trainer(args)
-    elif args.dataset == 'coco':
-        trainer = COCO_NAS_Trainer(args)
+    # if args.dataset == 'sa1b':
+    #     trainer = SA1B_NAS_Trainer(args)
+    # elif args.dataset == 'coco':
+    #     trainer = COCO_NAS_Trainer(args)
 
     # Calculate IoUs and average IoU before training
     # start_test = timeit.default_timer()
@@ -204,8 +212,6 @@ if __name__ == '__main__':
     #args.logger.info(f'supermodel pre-NAS IoUs: {sorted_mious}')
     args.logger.info(f'supermodel size : {count_parameters(args.supermodel.model)} params \t pre-NAS mIoU : {miou}% \t time: {round(end_test - start_test,4)} seconds')
     #save_preds(map,'Largest')
-
-
 
     #save_preds(map,'Largest')
     submodel, submodel.config.num_parameters, submodel.config.arch = args.supermodel.smallest_model()

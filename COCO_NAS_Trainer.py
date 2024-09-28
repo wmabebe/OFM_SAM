@@ -2,13 +2,15 @@ import torch
 import torch.nn as nn
 from pycocotools import mask as mask_utils
 from tqdm import tqdm
-from utility import compute_iou, get_trainable_parameters, get_optimizer_and_scheduler, save_preds
+from utility import compute_iou, compute_batch_iou, get_trainable_parameters, get_optimizer_and_scheduler, compute_flattened_iou
 import timeit
 import copy
 from monai.losses import DiceLoss, DiceFocalLoss, DiceCELoss
+from monai.metrics import compute_iou as monai_compute_iou
 import random
 import torchvision.transforms as transforms
 from torch.nn.functional import threshold, normalize
+from ofm import OFM
 
 class COCO_NAS_Trainer:
     #Initialize dataloader, args
@@ -17,27 +19,39 @@ class COCO_NAS_Trainer:
             setattr(self, key, value)
         self.best_smallest_submodel_iou = 0
         self.scheduler = None
+        self.target_miou = .75
         
         if self.loss == 'dice':
-            #self.loss_func = DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean')
+            #self.seg_loss_func = DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean')
             #seg_loss = monai.losses.DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean')
-            self.loss_func = DiceLoss(sigmoid=True, squared_pred=True, reduction='mean')
+            self.seg_loss_func = DiceLoss(sigmoid=True, squared_pred=True, reduction='mean')
         elif self.loss == 'dicefocal':
-            self.loss_func = DiceFocalLoss(lambda_focal=0.95,lambda_dice=0.05,sigmoid=True, squared_pred=True, reduction='mean')
+            self.seg_loss_func = DiceFocalLoss(lambda_focal=0.95,lambda_dice=0.05,sigmoid=True, squared_pred=True, reduction='mean')
         
         if self.loss == 'mse' or self.trainable == 'e':
-            self.loss_func = nn.MSELoss()
+            self.seg_loss_func = nn.MSELoss()
+        
+        self.iou_pred_loss_func = nn.MSELoss()
+        self.iou_pred_optimizer, self.iou_pred_scheduler = get_optimizer_and_scheduler(self.supermodel.model.mask_decoder.iou_prediction_head,0.001)
+        
     
     def eval(self,model,map=None):
         mIoU = []
         model = model.eval()
         model = nn.DataParallel(model).to(self.device)
         
-        for (inputs, images) in self.test_dataloader: #enumerate(tqdm(self.test_dataloader, disable=self.no_verbose)): 
+        for inputs in self.test_dataloader: #enumerate(tqdm(self.test_dataloader, disable=self.no_verbose)): 
 
             torch.cuda.empty_cache()
 
-            inputs["input_points"] = inputs["input_points"].squeeze(2)
+            # print(f'inputs["pixel_values"] : {inputs["pixel_values"].shape}')
+            # print(f'inputs["input_points"] : {inputs["input_points"].shape}')
+            # print(f'inputs["input_boxes"] : {inputs["input_boxes"].shape}')
+            # print(f'inputs["ground_truth_masks"] : {inputs["ground_truth_masks"].shape}')
+
+            if len(inputs["input_points"].shape) > 4:
+                inputs["input_points"] = inputs["input_points"].squeeze((2))
+
             with torch.no_grad():
                 if self.test_prompt == 'p':
                     outputs = model(pixel_values=inputs["pixel_values"].to(self.device),
@@ -70,9 +84,9 @@ class COCO_NAS_Trainer:
                     #Record ground truth with prediction
                     if map != None:
                         img_idx = inputs["img_id"][i]
-                        map[f'img-{img_idx}-obj-{j}-pred-0'] = (images[i],pt,bx,gt,pred_1,mious[0])
-                        map[f'img-{img_idx}-obj-{j}-pred-1'] = (images[i],pt,bx,gt,pred_2,mious[1])
-                        map[f'img-{img_idx}-obj-{j}-pred-2'] = (images[i],pt,bx,gt,pred_3,mious[2])
+                        map[f'img-{img_idx}-obj-{j}-pred-0'] = (inputs["image"][i],pt,bx,gt,pred_1,mious[0])
+                        map[f'img-{img_idx}-obj-{j}-pred-1'] = (inputs["image"][i],pt,bx,gt,pred_2,mious[1])
+                        map[f'img-{img_idx}-obj-{j}-pred-2'] = (inputs["image"][i],pt,bx,gt,pred_3,mious[2])
 
         model = model.module
         model = model.to('cpu')
@@ -95,7 +109,6 @@ class COCO_NAS_Trainer:
         # print(f'inputs["input_boxes"] : {inputs["input_boxes"].shape}')
         # print(f'inputs["ground_truth_masks"] : {inputs["ground_truth_masks"].shape}')
 
-
         if self.test_prompt == 'p':
             outputs = model(pixel_values=inputs["pixel_values"].to(self.device),
                             input_points=inputs["input_points"].to(self.device),
@@ -113,7 +126,14 @@ class COCO_NAS_Trainer:
         # print(f'stk_gt.shape : {stk_gt.shape}')
         # print(f'stk_out.shape : {stk_out.shape}')
 
-        loss = self.loss_func(stk_out, stk_gt)
+        # ious = compute_flattened_iou(stk_gt,stk_out)
+        # pred_ious = outputs.iou_scores.squeeze(2)
+        # print(f'Actual ious : {ious.shape}')
+        # print(f'Pred ious : {pred_ious.shape}')
+
+        loss = self.seg_loss_func(stk_out, stk_gt)
+        # iou_loss = self.iou_pred_loss_func(pred_ious,ious)
+        # loss = (0.9 * seg_loss) + (0.1 * iou_loss)
 
         # print(f'loss : {loss}')
 
@@ -157,6 +177,28 @@ class COCO_NAS_Trainer:
                 self.best_smallest_submodel_iou = miou
             metrics['test_miou'] = miou
             self.logger.info(f'\t{model_size} submodel train time : {round(end_train-start_train,4)}, test time {round(end_test-start_test,4)}, metrics {metrics}')
+            #Shrink search space further
+            # if miou > self.target_miou:
+            #     regular_config = {
+            #         "atten_out_space": [768], #must be divisbly by num_heads==12
+            #         "inter_hidden_space": [3072],
+            #         "residual_hidden": [1020],
+            #     }
+            #     elastic_config = {
+            #         "atten_out_space": [768], #Don't go over 768
+            #         "inter_hidden_space": [768,1020,1536], #Reduce for minimizing model size [1536,2304]
+            #         "residual_hidden": [1020],
+            #     }
+
+            #     config = {'0':regular_config, '1':elastic_config, '2':elastic_config,'3':regular_config, '4':regular_config,
+            #             '5':elastic_config,'6':elastic_config,'7':regular_config,'8':regular_config,'9':elastic_config,
+            #             '10':regular_config,'11':regular_config,
+            #             "layer_elastic":{
+            #             "elastic_layer_idx":[1,2,5,6,9],
+            #             "remove_layer_prob":[0.5,0.5,0.5,0.5,0.5]
+            #             }}
+            #     self.supermodel = OFM(self.supermodel.model, elastic_config=config)
+                
         else:
             self.logger.info(f'\t{model_size} submodel train time : {round(end_train-start_train,4)}, metrics {metrics}')
 
@@ -174,18 +216,14 @@ class COCO_NAS_Trainer:
                     self.supermodel.mlp_layer_reordering(self.reorder_dataloader,'wanda')
 
             start_epoch = timeit.default_timer()
-            for idx, batch in enumerate(tqdm(self.train_dataloader, disable=self.no_verbose)):
+            for idx, inputs in enumerate(tqdm(self.train_dataloader, disable=self.no_verbose)):
 
                 #Reorder mlp layers for every batch 
                 if self.reorder == 'per_batch':
                     if self.reorder_method == 'magnitude':
                         self.supermodel.mlp_layer_reordering()
                     elif self.reorder_method == 'wanda':
-                        self.supermodel.mlp_layer_reordering(self.reorder_dataloader,'wanda')
-                
-                if 'e' in self.trainable and 'm' in self.trainable:
-                    inputs, _ = batch
-                    
+                        self.supermodel.mlp_layer_reordering(self.reorder_dataloader,'wanda')                    
 
                 #set to True to test the submodels after training step
                 do_test = (idx == len(self.train_dataloader) - 1)
