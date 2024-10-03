@@ -4,9 +4,67 @@ import torch.nn.init as init
 from functools import partial
 import copy
 
+def mlp_masking(model, sparcity=.5, method='magnitude'):
+    sam_vit_layers = model.vision_encoder.layers
+
+    # Ensure sparsity is between 0 and 100
+    assert 0 <= sparcity <= 1, "Sparcity should be a value between 0 and 1."
+
+    # Convert the percentage to a fraction
+    fraction = sparcity
+
+    for i, layer in enumerate(sam_vit_layers):
+        W1 = layer.mlp.lin1.weight  # shape: (3072, 768)
+        W2 = layer.mlp.lin2.weight  # shape: (768, 3072)
+        b1 = layer.mlp.lin1.bias  # bias of lin1
+
+        # Flatten weights to easily sort and prune
+        W1_flat = W1.view(-1)
+        W2_flat = W2.view(-1)
+
+        # Determine the number of elements to mask
+        num_to_mask_W1 = int(fraction * W1_flat.numel())
+        num_to_mask_W2 = int(fraction * W2_flat.numel())
+
+        if method == 'magnitude':
+            # Sort W1 and W2 by absolute magnitude and get the threshold values
+            threshold_W1 = torch.topk(W1_flat.abs(), num_to_mask_W1, largest=False).values.max()
+            threshold_W2 = torch.topk(W2_flat.abs(), num_to_mask_W2, largest=False).values.max()
+
+            # Mask out the parameters below the threshold by setting them to zero
+            W1_mask = W1.abs() >= threshold_W1
+            W2_mask = W2.abs() >= threshold_W2
+        
+        else:
+            # Generate random indices for W1 and W2 to mask
+            W1_indices_to_mask = torch.randperm(W1_flat.numel())[:num_to_mask_W1]
+            W2_indices_to_mask = torch.randperm(W2_flat.numel())[:num_to_mask_W2]
+
+            # Create masks initialized to all ones (keep all)
+            W1_mask = torch.ones_like(W1_flat)
+            W2_mask = torch.ones_like(W2_flat)
+
+            # Set the random indices to zero (mask them)
+            W1_mask[W1_indices_to_mask] = 0
+            W2_mask[W2_indices_to_mask] = 0
+
+            # Reshape the masks back to original dimensions of W1 and W2
+            W1_mask = W1_mask.view(W1.shape)
+            W2_mask = W2_mask.view(W2.shape)
+
+        # Apply the mask to W1 and W2
+        W1.data.mul_(W1_mask)
+        W2.data.mul_(W2_mask)
+
+        # Optionally: You could also mask the biases similarly if needed
+
+        print(f"Layer {i}: Masked {num_to_mask_W1} params in W1 and {num_to_mask_W2} params in W2.")
+
+    return model
+
+
+
 wanda_sums = {i:[[],[]] for i in range(12)}
-
-
 
 # Assuming encoder is already a deep copy of model.vision_encoder
 def randomize_weights(model):
@@ -143,10 +201,10 @@ def wanda_reordering(model,dataloader):
     encoder.eval()
 
     with torch.no_grad():
-        for idx,(inputs, labels) in enumerate(dataloader):
-            data = {'pixel_values': torch.stack([d['pixel_values'].squeeze(0) for d in inputs])}
+        for idx,(inputs) in enumerate(dataloader):
+            #data = {'pixel_values': torch.stack([d['pixel_values'].squeeze(0) for d in inputs])}
             #print(f'data["pixel_values"] : {data["pixel_values"].shape}')
-            output = encoder(data["pixel_values"].to(device))
+            output = encoder(inputs["pixel_values"].to(device))
     
         for hook_1,hook_2 in zip(hooks_1,hooks_2):
             hook_1.remove()
@@ -194,7 +252,7 @@ def magnitude_reordering(sam_vit_layers):
         avg_sums = (row_sums + column_sums) / 2
         score_dist[i] = avg_sums.flatten().tolist()
 
-        _, sorted_indices = avg_sums.sort(descending=True)
+        _, sorted_indices = avg_sums.sort(descending=True) #descending=True
 
         W1_sorted = W1[sorted_indices, :] #sort rows of W1
         W2_sorted = W2[ :, sorted_indices ] #sort columns of W2
@@ -278,8 +336,8 @@ def sam_weight_reorder(model, dataloader=None, method='magnitude'):
         score_dist = wanda_reordering(model, dataloader)
 
     elif method == 'magnitude':
-        vision_encoder = model.vision_encoder.cpu()
-        sam_vit_layers = vision_encoder.layers
+        #model = model.to('cpu')
+        sam_vit_layers = model.vision_encoder.layers
         score_dist = magnitude_reordering(sam_vit_layers)
     elif method == 'movement':
         score_dist = movement_reordering(model,dataloader)

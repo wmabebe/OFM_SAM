@@ -5,11 +5,12 @@ from ofm import OFM
 from torch.utils.data import DataLoader, Subset
 from utility import *
 from logger import init_logs, get_logger
-from dataset import SA1BDataset, MitoDataset, COCOSegmentation
+from dataset import SA1BDataset, MitoDataset, COCOSegmentation, ADE20KDataset
 #from coco_dataset import COCOSegmentation
 import timeit
 from SA1B_NAS_Trainer import SA1B_NAS_Trainer
 from COCO_NAS_Trainer import COCO_NAS_Trainer
+from Mito_NAS_Trainer import Mito_NAS_Trainer
 
 
 if __name__ == '__main__':
@@ -85,10 +86,16 @@ if __name__ == '__main__':
     if args.dataset == 'mito':
 
         # Create an instance of the SAMDataset
-        train_dataset = load_dataset("datasets/mitochondria/training.tif", "datasets/mitochondria/training_groundtruth.tif")
-        test_dataset = load_dataset("datasets/mitochondria/testing.tif", "datasets/mitochondria/testing_groundtruth.tif")
+        
+        train_dataset = load_dataset(f'{DATA_ROOT}mitochondria/training.tif', f'{DATA_ROOT}mitochondria/training_groundtruth.tif')
+        test_dataset = load_dataset(f'{DATA_ROOT}mitochondria/testing.tif', f'{DATA_ROOT}mitochondria/testing_groundtruth.tif')
         train_dataset = MitoDataset(dataset=train_dataset, processor=processor)
         test_dataset = MitoDataset(dataset=test_dataset, processor=processor)
+
+        #Reordering dataset
+        reordering_subset = Subset(train_dataset, indices=range(0,1 * args.batch_size,1))
+        reorder_dataloader = DataLoader(reordering_subset, batch_size=2)
+        args.reorder_dataloader = reorder_dataloader
 
         # Apply subset for shorter training
         if args.train_subset:
@@ -96,6 +103,7 @@ if __name__ == '__main__':
             train_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=False)
         else:
             train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, drop_last=False)
+
         
         # Apply subset for shorter testing
         if args.test_subset:
@@ -133,6 +141,33 @@ if __name__ == '__main__':
         else:
             subset_dataset = Subset(test_dataset, indices=range(10000,len(test_dataset),1))
             test_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True, collate_fn=none_skipper_collate)
+
+    elif args.dataset == 'ade20k':
+        DATA_ROOT = 'ADE20K/ADEChallengeData2016/'
+        train_dataset = ADE20KDataset(f'{DATA_ROOT}', processor=processor, split='training')
+        test_dataset = ADE20KDataset(f'{DATA_ROOT}', processor=processor, split='validation')
+ 
+        reordering_dataset = ADE20KDataset(f'{DATA_ROOT}', processor=processor, split='training')
+        subset_dataset = Subset(reordering_dataset, indices=range(0,2 * args.batch_size,1))
+        reorder_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=True, drop_last=False, collate_fn=none_skipper_collate)
+
+        # Apply subset for shorter training
+        if args.train_subset:
+            subset_dataset = Subset(train_dataset, indices=range(0,args.train_subset,1))
+            train_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=none_skipper_collate) #collate_fn = custom_collate_fn
+        
+        else:
+            #subset_dataset = Subset(train_dataset, indices=range(0,3000,1))
+            train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=none_skipper_collate)
+        
+        if args.test_subset:
+            subset_dataset = Subset(test_dataset, indices=range(0,args.test_subset,1))
+            test_dataloader = DataLoader(subset_dataset, batch_size=args.batch_size, shuffle=False, drop_last=True, collate_fn=none_skipper_collate) #collate_fn = custom_collate_fn
+        else:
+            #subset_dataset = Subset(dataset, indices=range(3000,len(dataset),1))
+            test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=True, drop_last=True, collate_fn=none_skipper_collate) 
+
+
 
     elif args.dataset == 'coco':
         #dataset = COCOSegmentation('datasets/coco','val', processor=processor)
@@ -186,13 +221,11 @@ if __name__ == '__main__':
             plot_dist(score_dist,filename='movement-dist.png',importance='Movement')
         args.logger.info(f'Reordered {args.reorder} using {args.reorder_method if args.reorder_method else "No"} importance')
 
-    trainer = COCO_NAS_Trainer(args)
-
     #Initialize Trainer
-    # if args.dataset == 'sa1b':
-    #     trainer = SA1B_NAS_Trainer(args)
-    # elif args.dataset == 'coco':
-    #     trainer = COCO_NAS_Trainer(args)
+    if args.dataset == 'mito':
+        trainer = Mito_NAS_Trainer(args)
+    else:
+        trainer = COCO_NAS_Trainer(args)
 
     # Calculate IoUs and average IoU before training
     # start_test = timeit.default_timer()

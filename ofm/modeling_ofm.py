@@ -19,7 +19,8 @@ from .model_downsize import (
     mamba_module_handler,
     clip_module_handler,
 )
-from .weight_reorder import sam_weight_reorder, mask_layers, remove_layers
+from .weight_reorder import sam_weight_reorder, mask_layers, remove_layers, mlp_masking
+from .prune import prune_magnitude, prune_random
 from .param_prioritization import *
 from .utils import calculate_params, save_dict_to_file, load_dict_from_file
 
@@ -110,6 +111,17 @@ class OFM:
             return score_dist
         else:
             raise NotImplemented(f'Weight reordering not yet implemented for \
+                                 {self.model.config.model_type.lower()}')
+    
+    def mlp_layer_masking(self,dataloader=None,sparsity=.5,method='magnitude',prune_n=0, prune_m=0):
+        if "sam" == self.model.config.model_type.lower():
+            if method == 'naive':
+                #prune_random(self.model,sparsity)
+                prune_magnitude(self.model, sparsity, reverse=True)
+            elif method == 'magnitude':
+                prune_magnitude(self.model, sparsity, prune_n=prune_n, prune_m=prune_m)
+        else:
+            raise NotImplemented(f'MLP masking not yet implemented for \
                                  {self.model.config.model_type.lower()}')
     
     def mask_layers(self,layers):

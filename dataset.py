@@ -11,7 +11,7 @@ from PIL import Image
 from pycocotools.coco import COCO
 from tqdm import trange
 import cv2
-
+import glob
 
 class SA1BDataset(torch.utils.data.Dataset):
     def __init__(self, dataset_directory, processor, encoder=None, max_labels=64, split='train'):
@@ -220,8 +220,6 @@ class SA1BDataset(torch.utils.data.Dataset):
 
             image = np.array(image)
             image = np.moveaxis(image, -1, 0)
-
-            inputs["image"] = image
             
             return inputs  #, image, masks, boxes,  points
 
@@ -247,11 +245,14 @@ class MitoDataset(torch.utils.data.Dataset):
         y_min, y_max = np.min(y_indices), np.max(y_indices)
         # add perturbation to bounding box coordinates
         H, W = ground_truth_map.shape
-        x_min = max(0, x_min - np.random.randint(0, 20))
-        x_max = min(W, x_max + np.random.randint(0, 20))
-        y_min = max(0, y_min - np.random.randint(0, 20))
-        y_max = min(H, y_max + np.random.randint(0, 20))
-        bbox = [x_min, y_min, x_max, y_max]
+        ready = False
+        while not ready:
+            x_min = max(0, x_min - np.random.randint(0, 20))
+            x_max = min(W, x_max + np.random.randint(0, 20))
+            y_min = max(0, y_min - np.random.randint(0, 20))
+            y_max = min(H, y_max + np.random.randint(0, 20))
+            bbox = [x_min, y_min, x_max, y_max]
+            ready = y_min < y_max and x_min < x_max
 
         return bbox
     
@@ -290,7 +291,16 @@ class MitoDataset(torch.utils.data.Dataset):
         # remove batch dimension which the processor adds by default
         inputs = {k:v.squeeze(0) for k,v in inputs.items()}
 
-        return inputs, ground_truth_mask
+        inputs["boxes"] = torch.tensor([bbox_prompt])
+        inputs["points"] =  torch.tensor([point_prompt])
+        inputs["img_id"] = idx
+        inputs["ground_truth_mask"] = ground_truth_mask.squeeze()
+
+        image = np.array(image)
+        image = np.moveaxis(image, -1, 0)
+        inputs["image"] = image
+
+        return inputs
 
 
 class COCOSegmentation(torch.utils.data.Dataset):
@@ -537,3 +547,133 @@ def resize_image_and_mask(image, mask, target_size=(256, 256)):
             resized_mask = [cv2.resize(m, dsize=target_size, interpolation=cv2.INTER_NEAREST) for m in mask]
     
     return resized_image, resized_mask
+
+
+
+class ADE20KDataset(torch.utils.data.Dataset):
+    def __init__(self, base_dir, split='training', processor=None, max_labels=8):
+        super().__init__()
+        self.base_dir = base_dir
+        self.split = split
+        self.processor = processor
+        self.max_labels = max_labels
+        # Set image and annotation paths based on the split
+        if split == 'training':
+            self.image_dir = os.path.join(base_dir, 'images/training')
+            self.annotation_dir = os.path.join(base_dir, 'annotations/training')
+        elif split == 'validation':
+            self.image_dir = os.path.join(base_dir, 'images/validation')
+            self.annotation_dir = os.path.join(base_dir, 'annotations/validation')
+        elif split == 'testing':
+            self.image_dir = os.path.join(base_dir.replace("ADEChallengeData2016", ""), 'release_test/testing')
+            self.annotation_dir = None  # No annotations available for the test set
+ 
+        # Collect image paths
+        self.images = sorted(glob.glob(os.path.join(self.image_dir, '*.jpg')))
+        # Collect annotation paths only if they exist (for training and validation splits)
+        if self.annotation_dir:
+            self.annotations = sorted(glob.glob(os.path.join(self.annotation_dir, '*.png')))
+            assert len(self.images) == len(self.annotations), "Mismatch between image and annotation counts"
+        else:
+            self.annotations = None
+ 
+    def __len__(self):
+        return len(self.images)
+ 
+    @staticmethod
+    def get_bounding_box(ground_truth_map):
+        y_indices, x_indices = np.where(ground_truth_map > 0)
+        x_min, x_max = np.min(x_indices), np.max(x_indices)
+        y_min, y_max = np.min(y_indices), np.max(y_indices)
+        H, W = ground_truth_map.shape
+        x_min = max(0, x_min - np.random.randint(0, 20))
+        x_max = min(W, x_max + np.random.randint(0, 20))
+        y_min = max(0, y_min - np.random.randint(0, 20))
+        y_max = min(H, y_max + np.random.randint(0, 20))
+        return [x_min, y_min, x_max, y_max]
+ 
+    @staticmethod
+    def get_random_prompt(ground_truth_map, bbox):
+        x_min, y_min, x_max, y_max = bbox
+        while True:
+            x = np.random.randint(x_min, x_max)
+            y = np.random.randint(y_min, y_max)
+            if ground_truth_map[y, x] > 0:
+                return x, y
+ 
+    def filter_n_masks(self, masks):
+        if len(masks) < self.max_labels:
+            while len(masks) < self.max_labels:
+                masks.append(random.choice(masks))
+        elif len(masks) > self.max_labels:
+            masks = masks[:self.max_labels]
+        return masks
+ 
+    def __getitem__(self, index):
+        img_path = self.images[index]
+ 
+        # Load the image
+        image = Image.open(img_path).convert('RGB')
+ 
+        if self.annotations:
+            mask_path = self.annotations[index]
+            mask = np.array(Image.open(mask_path))  # Load mask as a numpy array
+ 
+            # Since the mask is black and white, create binary masks
+            unique_labels = np.unique(mask)
+            unique_labels = unique_labels[unique_labels != 0]  # Exclude background
+ 
+            bin_masks = [(mask == label).astype(float) for label in unique_labels]
+            bin_masks = [np.where(mask != 0, 1, 0) for mask in bin_masks]
+            
+ 
+            if len(bin_masks) == 0:
+                return None
+
+            image, bin_masks = resize_image_and_mask(image, bin_masks)
+
+            #bin_masks = [np.array(mask) for mask in bin_masks if np.sum(mask) > 100]
+            bin_masks = [(mask > 0).astype(float) for mask in bin_masks]
+            bin_masks = [torch.tensor(mask) for mask in bin_masks if np.sum(mask) > 100]
+
+            if 0 == len(bin_masks):
+                return None
+
+            bin_masks = self.filter_n_masks(bin_masks)
+ 
+            points, boxes = [], []
+            for bin_mask in bin_masks:
+                bbox = ADE20KDataset.get_bounding_box(bin_mask)
+                point = ADE20KDataset.get_random_prompt(bin_mask, bbox)
+                points.append([point])
+                boxes.append(bbox)
+ 
+            if self.processor:
+                inputs = self.processor(image, input_points=points, input_boxes=[[boxes]], return_tensors="pt")
+            else:
+                inputs = {"image": np.array(image), "points": points, "boxes": boxes}
+            
+            inputs = {k: v.squeeze(0) for k, v in inputs.items()}
+ 
+            # remove batch dimension which the processor adds by default
+            inputs = {k:v.squeeze(0) for k,v in inputs.items()}
+
+            #attach stuff to inputs
+            inputs["ground_truth_masks"] = torch.stack([torch.tensor(bin_mask) for bin_mask in bin_masks])
+            inputs["boxes"] = torch.stack([torch.tensor(box) for box in boxes])
+            inputs["points"] = torch.stack([torch.tensor(point) for point in points])
+            inputs["img_id"] = index
+
+            image = np.array(image)
+            image = np.moveaxis(image, -1, 0)
+
+            inputs["image"] = image
+            
+            return inputs
+        else:
+            if self.processor:
+                inputs = self.processor(image, return_tensors="pt")
+                inputs["img_id"] = index
+                return inputs
+            else:
+                return {"image": np.array(image), "img_id": index}
