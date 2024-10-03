@@ -30,14 +30,14 @@ import shutil
 
 def get_args():
     parser = argparse.ArgumentParser()
-    valid_datasets = ['sa1b', 'mito', 'coco']
+    valid_datasets = ['sa1b', 'mito', 'coco','ade20k']
     valid_trainables = ['e','m','p', 'em', 'ep','mp','emp']
     valid_submodels = ['lsm','ls','lm','sm','m','s']
     train_prompts = ['p','b','p+b','pob']
     test_prompts = ['p','b','p+b']
     loss_funcs = ['dice', 'dicefocal']
     reorder_interval = ['','once','per_epoch','per_batch']
-    reorder_method = ['magnitude','movement','wanda']
+    reorder_method = ['','magnitude','movement','wanda']
     parser.add_argument('--dataset', type=str, choices=valid_datasets, default='sa1b', help='Dataset (choices: {%(choices)s}, default: %(default)s).')
     parser.add_argument('--trainable', type=str, choices=valid_trainables, default='em', help='Choice of SAM modules to train (Encoder, Mask decoder, Both) (choices: {%(choices)s}, default: %(default)s).')
     parser.add_argument('--sandwich', type=str, choices=valid_submodels, default='lsm', help='Sandwich configuration: submodels to train (Largest, Smallest, Medium) (choices: {%(choices)s}, default: %(default)s).')
@@ -55,7 +55,7 @@ def get_args():
     parser.add_argument('--no_verbose', action='store_true', help='Enable to disable verbose mode.')
     parser.add_argument('--crop', action='store_true', help='Crop SA1B images for training with larger batch sizes.')
     parser.add_argument('--reorder', type=str, default='', choices=reorder_interval, help='How often to reorder the mlp layers space')
-    parser.add_argument('--reorder_method', type=str, default='magnitude', choices=reorder_method, help='Reordering method')
+    parser.add_argument('--reorder_method', type=str, default='', choices=reorder_method, help='Reordering method')
 
 
 
@@ -159,7 +159,7 @@ def show_points(coords, labels, ax, marker_size=375):
 
 
 def show_box(box, ax, label="",linecolor=[]):
-    print(f'box : {box}')
+    #print(f'box : {box}')
     x0, y0 = box[0], box[1]
     w, h = box[2] - box[0], box[3] - box[1]
     ax.add_patch(plt.Rectangle((x0, y0), w, h, edgecolor='black', facecolor=(0,0,0,0), lw=5))
@@ -214,7 +214,7 @@ def save_preds(map,folder):
         
         plt.axis('off')
         plot_path = os.path.join(folder, f'{name}.png')
-        plt.tight_layout()
+        #plt.tight_layout()
         plt.savefig(plot_path)
 
 def structured_pruning(model,layers_to_prune,global_attn_indexes):
@@ -280,8 +280,35 @@ def mutual_overlap(parent_mask, child_mask):
 
     return child_overlap, parent_overlap, intersection_overlap
 
-def compute_iou(mask_pred, mask_gt):
+def compute_batch_iou(mask_pred, mask_gt):
+    pred, gt =  mask_pred.cpu(), mask_gt.cpu()
+    intersection = torch.logical_and(pred, gt).sum().float()
+    union = torch.logical_or(pred, gt).sum().float()
+    iou = intersection / union if union > 0 else 0.0
+    return iou
 
+def compute_flattened_iou(stk_gt,stk_out):
+    B, O, H, W = stk_gt.shape
+
+    # Flatten the spatial dimensions (H, W) to compute pixel-wise intersection and union
+    stk_gt_flat = stk_gt.view(B, O, -1)  # Shape: [16, 64, 65536]
+    stk_out_flat = stk_out.view(B, O, -1)  # Shape: [16, 64, 65536]
+
+    # Compute intersection: element-wise multiplication and then sum along the spatial dimension
+    intersection = (stk_gt_flat * stk_out_flat).sum(dim=-1)  # Shape: [16, 64]
+
+    # Compute union: sum of both tensors minus their intersection
+    union = stk_gt_flat.sum(dim=-1) + stk_out_flat.sum(dim=-1) - intersection  # Shape: [16, 64]
+
+    # Compute IoU: Intersection divided by Union
+    iou = intersection / (union + 1e-6)
+
+    iou = iou.float()
+
+    return iou
+
+
+def compute_iou(mask_pred, mask_gt):
     if isinstance(mask_pred, list):
         ious = []
         for pred, gt in zip(mask_pred,mask_gt):
@@ -461,7 +488,9 @@ def load_dataset(data_path, label_path, patch_size=256, step=256):
     """Now, let us delete empty masks as they may cause issues later on during training. If a batch contains empty masks then the loss function will throw an error as it may not know how to handle empty tensors."""
 
     # Create a list to store the indices of non-empty masks
-    valid_indices = [i for i, mask in enumerate(masks) if mask.max() != 0]
+    #valid_indices = [i for i, mask in enumerate(masks) if mask.max() != 0]
+    valid_indices = [i for i, mask in enumerate(masks) if np.sum(mask) > 100]
+    
     # Filter the image and mask arrays to keep only the non-empty pairs
     filtered_images = images[valid_indices]
     filtered_masks = masks[valid_indices]
@@ -506,7 +535,7 @@ def get_prompt_grid(array_size=256, grid_size=10, batch_size=1):
 
 def get_optimizer_and_scheduler(params,lr=1e-5,weight_decay=0,scheduler=None):
     optimizer = AdamW(
-        params,
+        params.parameters() if hasattr(params, 'parameters') else params,
         lr=lr,
         weight_decay=weight_decay,
     )
@@ -578,10 +607,17 @@ def plot_dist(score_dist,filename='score-dist.png',importance='Magnitude'):
 
 #Collate for skipping blank masks in coco 
 def none_skipper_collate(batch):
-    "Puts each data field into a tensor with outer dimension batch size"
+    """Filter out None data points from batch.
+
+    Args:
+        batch (list): batch of data
+
+    Returns:
+        list: filtered batch
+    """
     batch = list(filter(lambda x : x is not None, batch))
-    return list(map(list, zip(*batch)))
-    #return default_collate(batch)
+    #return list(map(list, zip(*batch)))
+    return default_collate(batch)
 
 def euclidean_distance(tensor1, tensor2):
     return torch.sqrt(torch.sum((tensor1 - tensor2) ** 2))

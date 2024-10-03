@@ -109,6 +109,9 @@ class COCO_NAS_Trainer:
         # print(f'inputs["input_boxes"] : {inputs["input_boxes"].shape}')
         # print(f'inputs["ground_truth_masks"] : {inputs["ground_truth_masks"].shape}')
 
+        if len(inputs["input_points"].shape) > 4:
+            inputs["input_points"] = inputs["input_points"].squeeze((2))
+
         if self.test_prompt == 'p':
             outputs = model(pixel_values=inputs["pixel_values"].to(self.device),
                             input_points=inputs["input_points"].to(self.device),

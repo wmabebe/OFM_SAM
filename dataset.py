@@ -648,12 +648,7 @@ class ADE20KDataset(torch.utils.data.Dataset):
                 points.append([point])
                 boxes.append(bbox)
  
-            if self.processor:
-                inputs = self.processor(image, input_points=points, input_boxes=[[boxes]], return_tensors="pt")
-            else:
-                inputs = {"image": np.array(image), "points": points, "boxes": boxes}
-            
-            inputs = {k: v.squeeze(0) for k, v in inputs.items()}
+            inputs = self.processor(image, input_points=[points], input_boxes=[[boxes]], return_tensors="pt")
  
             # remove batch dimension which the processor adds by default
             inputs = {k:v.squeeze(0) for k,v in inputs.items()}
